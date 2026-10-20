@@ -1,0 +1,8 @@
+{
+  "name": "@playpot/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node src/main.ts", "test": "node --test src/*.test.ts" },
+  "dependencies": { "@playpot/game": "*", "viem": "^2.21.0", "ws": "^8.18.0" }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@playpot/game",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test src/*.test.ts" },
+  "dependencies": { "viem": "^2.21.0" }
+}

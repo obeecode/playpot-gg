@@ -1,0 +1,21 @@
+{
+  "name": "playpot",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test:contracts": "cd contracts && forge test",
+    "test:game": "npm test -w @playpot/game",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "abi": "node scripts/export-abi.mjs",
+    "anvil": "anvil --silent",
+    "server": "node packages/server/src/main.ts",
+    "e2e": "node scripts/e2e.ts",
+    "web": "npm run dev -w @playpot/web"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2"
+  }
+}
