@@ -10,6 +10,7 @@ import { Room } from "./room.ts";
 
 export interface ServerConfig {
   rpcUrl: string;
+  publicRpcUrl?: string;
   escrow: Address;
   refereePk: Hex;
   relayerPk?: Hex;
@@ -113,7 +114,7 @@ export async function startServer(cfg: ServerConfig) {
     };
     try {
       if (url.pathname === "/config") {
-        return json(200, { chainId: chain.chainId, escrow: cfg.escrow, token: tokenAddr, referee: referee.address, rpcUrl: cfg.rpcUrl });
+        return json(200, { chainId: chain.chainId, escrow: cfg.escrow, token: tokenAddr, referee: referee.address, rpcUrl: cfg.publicRpcUrl ?? cfg.rpcUrl });
       }
       const m = url.pathname.match(/^\/log\/(\d+)$/);
       if (m) return json(200, (await getRoom(m[1])).log);
@@ -159,6 +160,7 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
   };
   const s = await startServer({
     rpcUrl: process.env.RPC_URL ?? "http://127.0.0.1:8545",
+    publicRpcUrl: process.env.PUBLIC_RPC_URL,
     escrow: need("ESCROW") as Address,
     refereePk: need("REFEREE_PK") as Hex,
     relayerPk: process.env.RELAYER_PK as Hex | undefined,

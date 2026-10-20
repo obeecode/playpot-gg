@@ -84,6 +84,21 @@ You need a normal browser and internet access for the faucet steps.
 5. **Serve the client.** `npm run build:web` and host `packages/web/dist` on any static host, or run `npm run web`. Open it with `?server=<referee url>`.
 6. **Play.** Each player connects a wallet (the client switches to Base Sepolia), clicks **Mint 1000 test tokens**, and needs a little Base Sepolia ETH for gas.
 
+## Host it on playpot.gg (one small VPS)
+
+`deploy/` runs the referee and the web client behind Caddy, which gets HTTPS certificates automatically.
+
+1. Point DNS `A` records for `app.playpot.gg` and `api.playpot.gg` at the VPS IP (DNS only, no proxy, until it works).
+2. On the VPS (Docker + Compose installed): `git clone` this branch, then
+   ```bash
+   cd playpot-gg/deploy
+   cp .env.example .env     # fill in ESCROW, REFEREE_PK, RPC_URL (testnet keys only)
+   docker compose up -d --build
+   ```
+3. Open `https://app.playpot.gg`. The client is built to talk to `https://api.playpot.gg`.
+
+Use a keyed RPC (Alchemy, QuickNode) in `RPC_URL` for the server, and keep it out of the browser by setting a different `PUBLIC_RPC_URL`.
+
 ## Known limits of v0
 
 - **Mock referee.** One plain key signs as the referee. Phase 2 moves it into an attested enclave; until then, the referee can only affect settlement by colluding with a player, and the dispute path above overturns that.

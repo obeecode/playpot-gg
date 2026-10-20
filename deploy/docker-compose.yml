@@ -1,0 +1,35 @@
+services:
+  referee:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: referee
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "8787"
+    volumes:
+      - referee-data:/app/data
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: web
+      args:
+        VITE_SERVER_URL: https://${API_DOMAIN}
+    restart: unless-stopped
+    depends_on: [referee]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+    volumes:
+      - caddy-data:/data
+
+volumes:
+  referee-data:
+  caddy-data:

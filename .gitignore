@@ -7,3 +7,4 @@ deployments/local.json
 .env
 *.log
 data/
+deploy/.env

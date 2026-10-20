@@ -99,6 +99,7 @@ const S = {
   view: null as MatchView | null,
   msg: "",
   busy: false,
+  noMulticall: false,
   stakeInput: "10",
 };
 
@@ -152,7 +153,11 @@ const loadSk = (id: bigint): LocalAccount | null => {
 // -------------------------------------------------------------------------------------- bootstrap
 
 async function init() {
-  S.serverUrl = params.get("server") ?? localStorage.getItem("playpot:server") ?? "http://127.0.0.1:8787";
+  S.serverUrl =
+    params.get("server") ??
+    (import.meta.env.VITE_SERVER_URL as string | undefined) ??
+    localStorage.getItem("playpot:server") ??
+    "http://127.0.0.1:8787";
   try {
     const cfg = (await (await fetch(`${S.serverUrl}/config`)).json()) as Config;
     S.cfg = cfg;
@@ -161,6 +166,7 @@ async function init() {
       name: cfg.chainId === 84532 ? "Base Sepolia" : `chain ${cfg.chainId}`,
       nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
       rpcUrls: { default: { http: [cfg.rpcUrl] } },
+      contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
     });
     S.pub = createPublicClient({ chain: S.chain, transport: http(cfg.rpcUrl) });
     localStorage.setItem("playpot:server", S.serverUrl);
@@ -170,7 +176,7 @@ async function init() {
   }
   render();
   await refresh();
-  setInterval(() => void refresh(), 3000);
+  setInterval(() => void refresh(), 5000);
 }
 
 async function connect(burner: boolean) {
@@ -224,18 +230,29 @@ async function refresh() {
       ]);
     }
     const next = await read<bigint>(escrow, potEscrowAbi, "nextId");
-    const from = next > 40n ? next - 40n : 1n;
+    const from = next > 30n ? next - 30n : 1n;
     const ids: bigint[] = [];
     for (let i = from; i < next; i++) ids.push(i);
-    const rows = await Promise.all(
-      ids.map(async (id) => {
-        const [o, m] = await Promise.all([
-          read<readonly [Address, Address, bigint, bigint, boolean]>(escrow, potEscrowAbi, "offers", [id]),
-          read<OnChain>(escrow, potEscrowAbi, "getMatch", [id]),
-        ]);
-        return { id, o, m };
-      }),
-    );
+    // One eth_call for every offer and match, so public RPCs are not rate limited.
+    const calls = ids.flatMap((id) => [
+      { address: escrow, abi: potEscrowAbi, functionName: "offers", args: [id] },
+      { address: escrow, abi: potEscrowAbi, functionName: "getMatch", args: [id] },
+    ]);
+    let out: unknown[] = [];
+    if (ids.length) {
+      try {
+        if (S.noMulticall) throw new Error("no multicall");
+        out = (await S.pub.multicall({ contracts: calls as never, allowFailure: false })) as unknown[];
+      } catch {
+        S.noMulticall = true; // local chains without Multicall3: fall back to one call each
+        out = await Promise.all(calls.map((c) => read(c.address, c.abi, c.functionName, c.args)));
+      }
+    }
+    const rows = ids.map((id, i) => ({
+      id,
+      o: out[2 * i] as readonly [Address, Address, bigint, bigint, boolean],
+      m: out[2 * i + 1] as OnChain,
+    }));
     S.offers = rows
       .filter((r) => r.o[4])
       .map((r) => ({ id: r.id, creator: r.o[0], stake: r.o[2], expiry: r.o[3], open: r.o[4] }))
