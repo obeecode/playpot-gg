@@ -6,3 +6,4 @@ contracts/broadcast/
 deployments/local.json
 .env
 *.log
+data/

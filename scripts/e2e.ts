@@ -1,7 +1,7 @@
 // End-to-end run against a local anvil chain: contracts + referee server + two simulated players.
 // Usage: (cd contracts && forge build) && node scripts/e2e.ts
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -30,6 +30,7 @@ import {
   type ServerMsg,
 } from "@playpot/game";
 import { startServer } from "../packages/server/src/main.ts";
+import { deployContracts } from "./lib.ts";
 
 const PORT = 18545;
 const RPC = `http://127.0.0.1:${PORT}`;
@@ -51,12 +52,6 @@ const DRAW = [0, 1, 2, 4, 3, 5, 7, 6, 8];
 
 const log = (s: string) => console.log(`\n== ${s}`);
 const ok = (s: string) => console.log(`   ok  ${s}`);
-
-function artifact(name: string): { abi: unknown; bytecode: Hex } {
-  const path = join("contracts", "out", `${name}.sol`, `${name}.json`);
-  const j = JSON.parse(readFileSync(path, "utf8"));
-  return { abi: j.abi, bytecode: j.bytecode.object as Hex };
-}
 
 async function startAnvil(): Promise<ChildProcess> {
   const bin = process.env.ANVIL ?? "anvil";
@@ -143,20 +138,15 @@ try {
   const send = async (hash: Promise<Hex>) => pub.waitForTransactionReceipt({ hash: await hash });
 
   log("deploy");
-  const tokenArt = artifact("TestToken");
-  const escrowArt = artifact("PotEscrow");
-  const dep = wc(wallets.deployer);
-  const tokenRcpt = await send(dep.deployContract({ chain: null, abi: tokenArt.abi as never, bytecode: tokenArt.bytecode }));
-  const token = tokenRcpt.contractAddress!;
-  const escrowRcpt = await send(
-    dep.deployContract({
-      chain: null,
-      abi: escrowArt.abi as never,
-      bytecode: escrowArt.bytecode,
-      args: [token, wallets.referee.address, TREASURY, Number(RAKE_BPS), WINDOW, 3600, 600, BOND] as never,
-    }),
-  );
-  const escrow = escrowRcpt.contractAddress!;
+  const { token, escrow } = await deployContracts({
+    rpc: RPC,
+    deployerPk: KEYS.deployer,
+    referee: wallets.referee.address,
+    treasury: TREASURY,
+    rakeBps: Number(RAKE_BPS),
+    challengeWindow: WINDOW,
+    bond: BOND,
+  });
   ok(`token ${token}`);
   ok(`escrow ${escrow}`);
   const domain = eip712Domain(chainId, escrow);
