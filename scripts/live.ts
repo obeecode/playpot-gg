@@ -76,9 +76,9 @@ const server = await startServer({
 });
 console.log(`\nLocal: http://localhost:${server.port}   (open ?burner=alice and ?burner=bob in two windows to test alone)`);
 
-// TUNNEL_PROTOCOL=http2 helps on networks where QUIC (UDP) is slow or blocked.
-const tunnelArgs = ["tunnel", "--url", `http://localhost:${server.port}`, "--no-autoupdate"];
-if (process.env.TUNNEL_PROTOCOL) tunnelArgs.push("--protocol", process.env.TUNNEL_PROTOCOL);
+// TCP (http2) is more reliable than the default QUIC/UDP on many home networks, VPNs and antivirus setups.
+// Set TUNNEL_PROTOCOL=quic to use QUIC instead.
+const tunnelArgs = ["tunnel", "--url", `http://localhost:${server.port}`, "--no-autoupdate", "--protocol", process.env.TUNNEL_PROTOCOL ?? "http2"];
 const tunnel = spawn("cloudflared", tunnelArgs, { stdio: ["ignore", "pipe", "pipe"] });
 children.push(tunnel);
 tunnel.on("error", () => {
@@ -97,5 +97,13 @@ const onData = (buf: Buffer) => {
     console.log(`\n=======================================================\n  Share this link with your friend:\n  ${m[0]}\n=======================================================\nOpen it yourself too. Each of you gets a burner wallet; use "Dev: 10 ETH" then "Mint 1000 test tokens".\nKeep this window open while you play. Ctrl+C to stop (the chain resets).`);
   }
 };
-tunnel.stdout?.on("data", onData);
-tunnel.stderr?.on("data", onData);
+const showProblems = (buf: Buffer) => {
+  for (const line of buf.toString().split(/\r?\n/)) {
+    if (/\b(ERR|WRN)\b/.test(line) && !/trycloudflare\.com\/?$/.test(line)) console.log(`[tunnel] ${line.replace(/^\S+\s+/, "").slice(0, 200)}`);
+  }
+};
+for (const stream of [tunnel.stdout, tunnel.stderr]) {
+  stream?.on("data", onData);
+  stream?.on("data", showProblems);
+}
+tunnel.on("exit", (code) => console.log(`[tunnel] cloudflared exited (code ${code}). The public link no longer works; press Ctrl+C and run again.`));
