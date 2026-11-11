@@ -72,6 +72,7 @@ interface MatchView {
   verify: { ok: boolean; errors: string[] } | null;
   sk: LocalAccount | null;
   resultSent: boolean;
+  pending: boolean;
   settled: string;
   error: string;
   step: number | null;
@@ -352,6 +353,7 @@ async function openMatch(id: bigint) {
     verify: null,
     sk: loadSk(id),
     resultSent: false,
+    pending: false,
     settled: "",
     error: "",
     step: null,
@@ -391,6 +393,8 @@ async function reverify(v: MatchView) {
 
 async function onServerMsg(v: MatchView, msg: ServerMsg) {
   if (S.view !== v) return;
+  if (msg.type === "state" || msg.type === "event" || msg.type === "error") v.pending = false;
+  if (msg.type === "event") v.error = "";
   if (msg.type === "state") {
     v.log = msg.log;
     if (msg.settleTx) v.settled = `${msg.settleMode} settlement, tx ${short(msg.settleTx)}`;
@@ -440,6 +444,15 @@ async function playCell(cell: number) {
   const side = mySide(v);
   const i = v.log.moves.length;
   if (v.log.result !== undefined || (i % 2 === 0 ? 1 : 2) !== side) return;
+  if (v.pending) return;
+  v.pending = true;
+  setTimeout(() => {
+    if (v.pending) {
+      v.pending = false;
+      render();
+    }
+  }, 10_000);
+  render();
   const prevHash = i === 0 ? genesisHash(v.id) : v.log.moves[i - 1].hash;
   const sig = await signMove(v.sk, eip712Domain(S.cfg.chainId, S.cfg.escrow), { matchId: v.id, index: i, cell, prevHash });
   v.ws?.send(JSON.stringify({ type: "move", matchId: v.id.toString(), index: i, cell, sig } satisfies ClientMsg));
@@ -491,7 +504,7 @@ function renderMatch(v: MatchView): string {
     <div class="board">${grid
       .map(
         (c, i) =>
-          `<button class="cell ${myTurn ? "mine" : ""}" data-act="cell" data-cell="${i}" ${myTurn && !c ? "" : "disabled"}>${c ?? ""}</button>`,
+          `<button class="cell ${myTurn ? "mine" : ""}" data-act="cell" data-cell="${i}" ${myTurn && !c && !v.pending ? "" : "disabled"}>${c ?? ""}</button>`,
       )
       .join("")}</div>
     <div id="turn">${over ? `<b>${finished}</b>${youWon ? " &mdash; you won" : ""}` : myTurn ? "Your move" : log ? "Waiting for opponent" : "Connecting…"}</div>

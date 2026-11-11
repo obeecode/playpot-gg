@@ -142,8 +142,14 @@ try {
     await p.waitForSelector(sel, { timeout: TO });
     await p.click(sel);
   };
-  await play(alice, 0);
+  {
+    const sel = `[data-cell="0"].mine:not([disabled])`;
+    await alice.waitForSelector(sel, { timeout: TO });
+    await alice.dblclick(sel); // a double tap must not send the move twice or leave an error behind
+  }
   await play(bob, 3);
+  await waitText(alice, "#turn", /Your move|Waiting/);
+  assert.equal(await alice.$("#match .bad"), null, "no stale error after a double tap");
   await play(alice, 1);
   await play(bob, 4);
   await bob.screenshot({ path: join(SHOTS, "2-bob-midgame.png") });
