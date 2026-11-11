@@ -71,6 +71,18 @@ It prints a `https://<random>.trycloudflare.com` link. Open it yourself and send
 
 The referee serves the site and a restricted chain proxy on that one address, so nothing else needs to be reachable. The link changes every run, the chain resets when you stop, and anyone with the link can play, so share it privately. The anvil dev keys are public, so this mode generates fresh random keys for the deployer and referee.
 
+### Same thing on Base Sepolia, with no server to rent
+
+Deploy the contracts once (below), then run the referee on your own computer and share it through the same tunnel:
+
+```powershell
+$env:ESCROW = "0x<escrow address>"
+$env:REFEREE_PK = "0x<referee private key>"
+npm run live
+```
+
+Games and balances live on Base Sepolia, so they survive restarts; the link changes each run. Each player needs a little Base Sepolia ETH for gas (copy the address from the Wallet box into a faucet) and then clicks **Mint 1000 test tokens**. MetaMask works here.
+
 ## Deploy to Base Sepolia (play with a friend)
 
 You need a normal browser and internet access for the faucet steps.
