@@ -50,7 +50,7 @@ const REFEREE = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b786
 const SHOTS = process.env.SHOTS_DIR ?? join(tmpdir(), "playpot-shots");
 mkdirSync(SHOTS, { recursive: true });
 
-const built = spawnSync("npm", ["run", "build", "-w", "@playpot/web"], { stdio: "ignore", shell: true });
+const built = spawnSync("npm", ["run", "build:web"], { stdio: "ignore", shell: true });
 if (built.status !== 0) throw new Error("web build failed");
 
 const anvil = spawn(process.env.ANVIL ?? "anvil", ["--port", String(ANVIL_PORT), "--silent"], { stdio: "ignore" });

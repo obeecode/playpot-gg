@@ -88,7 +88,7 @@ You need a normal browser and internet access for the faucet steps.
    REFEREE=<referee address> forge script script/Deploy.s.sol \
      --rpc-url https://sepolia.base.org --account deployer --broadcast
    ```
-   Note the printed `ESCROW` address. Optional env: `TREASURY`, `RAKE_BPS` (max 1000), `CHALLENGE_WINDOW`, `MATCH_DURATION`, `ABORT_GRACE`, `DISPUTE_BOND`.
+   To publish the verified source on the block explorer (so anyone can read exactly what the contract does), get a free Etherscan API key and add `--verify --etherscan-api-key <key>` to that command. The compiler settings are pinned in `contracts/foundry.toml` (solc 0.8.28, optimizer 200 runs, cancun). Note the printed `ESCROW` address. Optional env: `TREASURY`, `RAKE_BPS` (max 1000), `CHALLENGE_WINDOW`, `MATCH_DURATION`, `ABORT_GRACE`, `DISPUTE_BOND`.
 4. **Run the referee** somewhere your friend can reach it:
    ```bash
    RPC_URL=https://sepolia.base.org ESCROW=<escrow> REFEREE_PK=<referee private key> \
@@ -112,6 +112,23 @@ You need a normal browser and internet access for the faucet steps.
 3. Open `https://app.playpot.gg`. The client is built to talk to `https://api.playpot.gg`.
 
 Use a keyed RPC (Alchemy, QuickNode) in `RPC_URL` for the server, and keep it out of the browser by setting a different `PUBLIC_RPC_URL`.
+
+## Open source and verifying what is live
+
+The code is MIT licensed (`LICENSE`). Contracts are immutable and, once verified on the explorer (above), anyone can read them. The web client is a reproducible build: every built file is hashed into `manifest.json`, with one **site hash** for the whole thing.
+
+Anyone can check that a live site serves exactly the build you published:
+```bash
+git clone -b <release tag or commit> https://github.com/obeecode/playpot-gg && cd playpot-gg
+npm ci && npm run build:web                      # prints the site hash
+npm run verify:site -- https://app.playpot.gg    # compares what is live to your own build
+npm run verify:site -- https://app.playpot.gg --expect <published hash>
+```
+It re-hashes every file as the site actually serves it, and fails on a modified script, an unlisted file, an injected inline or external script, or a hash that differs from your build. Line endings are pinned to LF (`.gitattributes`) and Node to `22.22.0` (`.nvmrc`, Dockerfile) so builds match across machines. The official hash is the Linux build, so compare on Linux or in the Docker image.
+
+When you deploy a release, publish its site hash next to the git commit (for example in the release notes), so users have something to compare against.
+
+**What this does not prove yet:** that the referee server is running the published code. It runs on a machine you control, so for now players trust it for ordering and timing. A hardware-attested referee (Phase 2) is what closes that, and an on-chain engine registry will pin the rules each match uses.
 
 ## Known limits of v0
 

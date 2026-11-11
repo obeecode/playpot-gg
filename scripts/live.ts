@@ -16,7 +16,7 @@ if (!existsSync("contracts/out/PotEscrow.sol/PotEscrow.json")) {
   process.exit(1);
 }
 console.log("Building the web client...");
-const build = spawnSync("npm", ["run", "build", "-w", "@playpot/web"], { stdio: "inherit", shell: true });
+const build = spawnSync("npm", ["run", "build:web"], { stdio: "inherit", shell: true });
 if (build.status !== 0) process.exit(1);
 
 const children: ChildProcess[] = [];

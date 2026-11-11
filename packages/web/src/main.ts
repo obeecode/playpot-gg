@@ -101,6 +101,7 @@ const S = {
   view: null as MatchView | null,
   msg: "",
   busy: false,
+  build: "",
   stakeInput: "10",
 };
 
@@ -187,6 +188,7 @@ async function init() {
     });
     S.pub = createPublicClient({ chain: S.chain, transport: transport(cfg.rpcUrl) });
     localStorage.setItem("playpot:server", S.serverUrl);
+    fetch(`${S.serverUrl}/manifest.json`).then((r) => r.json()).then((m: { root?: string }) => { S.build = (m.root ?? "").slice(0, 12); render(); }).catch(() => {});
     if (params.has("burner") || !window.ethereum) await connect(true);
   } catch (e) {
     S.msg = `Cannot reach the referee server at ${S.serverUrl}: ${(e as Error).message}`;
@@ -530,7 +532,7 @@ function render() {
   html += `</section>`;
 
   if (S.view) {
-    app.innerHTML = html + renderMatch(S.view);
+    app.innerHTML = html + renderMatch(S.view) + `<div class="dim mono" id="build" style="margin-top:12px">${S.build ? `site build ${S.build} &middot; check it with: npm run verify:site -- ${esc(location.origin)}` : ""}</div>`;
     return;
   }
 
@@ -565,7 +567,7 @@ function render() {
           .join("")
   }</table></section>`;
 
-  app.innerHTML = html;
+  app.innerHTML = html + `<div class="dim mono" id="build" style="margin-top:12px">${S.build ? `site build ${S.build} &middot; check it with: npm run verify:site -- ${esc(location.origin)}` : ""}</div>`;
   if (keep) {
     const el = document.getElementById("stake") as HTMLInputElement | null;
     el?.focus();

@@ -16,14 +16,21 @@
     "web": "npm run dev -w @playpot/web",
     "dev": "node scripts/dev.ts",
     "ui-test": "node scripts/ui-test.ts",
-    "test": "npm run test:contracts && npm run test:game && npm run typecheck && npm run e2e && npm run ui-test",
-    "build:web": "npm run build -w @playpot/web",
-    "live": "node scripts/live.ts"
+    "test": "npm run test:contracts && npm run test:game && npm run test:verify && npm run typecheck && npm run e2e && npm run ui-test",
+    "build:web": "npm run build -w @playpot/web && node scripts/hash-dist.ts packages/web/dist",
+    "live": "node scripts/live.ts",
+    "hash:web": "node scripts/hash-dist.ts packages/web/dist",
+    "verify:site": "node scripts/verify-site.ts",
+    "test:verify": "node --test scripts/verify-site.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
     "playwright-core": "^1.49.0",
     "typescript": "^5.7.2"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18.0"
   }
 }
