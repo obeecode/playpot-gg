@@ -33,6 +33,8 @@ import {
   type ClientMsg,
   type MatchLog,
   type ServerMsg,
+  type StateMatch,
+  type StateResponse,
 } from "@playpot/game";
 
 // ------------------------------------------------------------------------------- types & state
@@ -99,7 +101,6 @@ const S = {
   view: null as MatchView | null,
   msg: "",
   busy: false,
-  noMulticall: false,
   stakeInput: "10",
 };
 
@@ -110,6 +111,19 @@ const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 const tok = (n: bigint) => formatUnits(n, 6);
 const same = (a?: string | null, b?: string | null) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 const wsUrl = (u: string) => u.replace(/^http/, "ws");
+const transport = (url: string) => http(url, { timeout: 30_000, retryCount: 2, batch: { wait: 25 } });
+const toOnChain = (m: StateMatch): OnChain => ({
+  p1: m.p1,
+  p2: m.p2,
+  stake: BigInt(m.stake),
+  status: m.status,
+  deadline: BigInt(m.deadline),
+  windowEnd: BigInt(m.windowEnd),
+  proposedResult: m.proposedResult,
+  disputer: m.disputer,
+  bond: BigInt(m.bond),
+  bestLen: m.bestLen,
+});
 
 // ----------------------------------------------------------------------------------- chain helpers
 
@@ -117,6 +131,8 @@ const read = <T,>(address: Address, abi: unknown, functionName: string, args: un
   S.pub!.readContract({ address, abi, functionName, args } as never) as Promise<T>;
 
 async function write(address: Address, abi: unknown, functionName: string, args: unknown[]) {
+  // The local chain's fees are known, so skip the estimation round trips (each can take seconds over a tunnel).
+  const local = S.cfg!.chainId === 31337;
   const hash = await S.wallet!.writeContract({
     chain: S.chain!,
     account: S.acct!,
@@ -124,8 +140,9 @@ async function write(address: Address, abi: unknown, functionName: string, args:
     abi,
     functionName,
     args,
+    ...(local ? { gas: 1_500_000n, maxFeePerGas: 10_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n } : {}),
   } as never);
-  return S.pub!.waitForTransactionReceipt({ hash });
+  return S.pub!.waitForTransactionReceipt({ hash, pollingInterval: local ? 700 : 2000 });
 }
 const escrowWrite = (fn: string, args: unknown[]) => write(S.cfg!.escrow, potEscrowAbi, fn, args);
 
@@ -168,7 +185,7 @@ async function init() {
       rpcUrls: { default: { http: [cfg.rpcUrl] } },
       contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
     });
-    S.pub = createPublicClient({ chain: S.chain, transport: http(cfg.rpcUrl) });
+    S.pub = createPublicClient({ chain: S.chain, transport: transport(cfg.rpcUrl) });
     localStorage.setItem("playpot:server", S.serverUrl);
     if (params.has("burner") || !window.ethereum) await connect(true);
   } catch (e) {
@@ -193,7 +210,7 @@ async function connect(burner: boolean) {
     S.burner = true;
     S.acct = account;
     S.addr = account.address;
-    S.wallet = createWalletClient({ account, chain: S.chain, transport: http(S.cfg.rpcUrl) });
+    S.wallet = createWalletClient({ account, chain: S.chain, transport: transport(S.cfg.rpcUrl) });
     return;
   }
   const eth = window.ethereum!;
@@ -216,52 +233,32 @@ async function connect(burner: boolean) {
 }
 
 async function refresh() {
-  if (!S.cfg || !S.pub) return;
-  const { escrow, token } = S.cfg;
+  if (!S.cfg) return;
   try {
-    S.now = (await S.pub.getBlock()).timestamp;
-    S.bond = await read<bigint>(escrow, potEscrowAbi, "disputeBond");
-    if (S.addr) {
-      [S.eth, S.tokens, S.allowance, S.claimable] = await Promise.all([
-        S.pub.getBalance({ address: S.addr }),
-        read<bigint>(token, testTokenAbi, "balanceOf", [S.addr]),
-        read<bigint>(token, testTokenAbi, "allowance", [S.addr, escrow]),
-        read<bigint>(escrow, potEscrowAbi, "claimable", [S.addr]),
-      ]);
+    const q = new URLSearchParams();
+    if (S.addr) q.set("addr", S.addr);
+    if (S.view) q.set("match", S.view.id.toString());
+    const res = await fetch(`${S.serverUrl}/state?${q}`, { signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) throw new Error(`state ${res.status}`);
+    const st = (await res.json()) as StateResponse;
+    S.now = BigInt(st.now);
+    S.bond = BigInt(st.bond);
+    if (st.account) {
+      S.eth = BigInt(st.account.eth);
+      S.tokens = BigInt(st.account.tokens);
+      S.allowance = BigInt(st.account.allowance);
+      S.claimable = BigInt(st.account.claimable);
     }
-    const next = await read<bigint>(escrow, potEscrowAbi, "nextId");
-    const from = next > 30n ? next - 30n : 1n;
-    const ids: bigint[] = [];
-    for (let i = from; i < next; i++) ids.push(i);
-    // One eth_call for every offer and match, so public RPCs are not rate limited.
-    const calls = ids.flatMap((id) => [
-      { address: escrow, abi: potEscrowAbi, functionName: "offers", args: [id] },
-      { address: escrow, abi: potEscrowAbi, functionName: "getMatch", args: [id] },
-    ]);
-    let out: unknown[] = [];
-    if (ids.length) {
-      try {
-        if (S.noMulticall) throw new Error("no multicall");
-        out = (await S.pub.multicall({ contracts: calls as never, allowFailure: false })) as unknown[];
-      } catch {
-        S.noMulticall = true; // local chains without Multicall3: fall back to one call each
-        out = await Promise.all(calls.map((c) => read(c.address, c.abi, c.functionName, c.args)));
-      }
-    }
-    const rows = ids.map((id, i) => ({
-      id,
-      o: out[2 * i] as readonly [Address, Address, bigint, bigint, boolean],
-      m: out[2 * i + 1] as OnChain,
-    }));
-    S.offers = rows
-      .filter((r) => r.o[4])
-      .map((r) => ({ id: r.id, creator: r.o[0], stake: r.o[2], expiry: r.o[3], open: r.o[4] }))
+    S.offers = st.rows
+      .filter((r) => r.offer.open)
+      .map((r) => ({ id: BigInt(r.id), creator: r.offer.creator, stake: BigInt(r.offer.stake), expiry: BigInt(r.offer.expiry), open: true }))
       .reverse();
-    S.mine = rows
-      .filter((r) => r.m.status !== 0 && S.addr && (same(r.m.p1, S.addr) || same(r.m.p2, S.addr)))
-      .map((r) => ({ id: r.id, m: r.m }))
+    S.mine = st.rows
+      .filter((r) => r.match.status !== 0 && S.addr && (same(r.match.p1, S.addr) || same(r.match.p2, S.addr)))
+      .map((r) => ({ id: BigInt(r.id), m: toOnChain(r.match) }))
       .reverse();
-    if (S.view) S.view.onchain = await read<OnChain>(escrow, potEscrowAbi, "getMatch", [S.view.id]);
+    if (S.view && st.view) S.view.onchain = toOnChain(st.view);
+    if (S.msg.startsWith("refresh failed")) S.msg = "";
   } catch (e) {
     S.msg = `refresh failed: ${(e as Error).message.slice(0, 160)}`;
   }
@@ -359,7 +356,7 @@ async function openMatch(id: bigint) {
     onchain: null,
   };
   S.view = v;
-  v.onchain = await read<OnChain>(S.cfg!.escrow, potEscrowAbi, "getMatch", [id]);
+  await refresh();
   const ws = new WebSocket(wsUrl(S.serverUrl));
   v.ws = ws;
   const send = (m: ClientMsg) => ws.send(JSON.stringify(m));

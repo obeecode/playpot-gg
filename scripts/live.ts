@@ -76,9 +76,10 @@ const server = await startServer({
 });
 console.log(`\nLocal: http://localhost:${server.port}   (open ?burner=alice and ?burner=bob in two windows to test alone)`);
 
-const tunnel = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${server.port}`, "--no-autoupdate"], {
-  stdio: ["ignore", "pipe", "pipe"],
-});
+// TUNNEL_PROTOCOL=http2 helps on networks where QUIC (UDP) is slow or blocked.
+const tunnelArgs = ["tunnel", "--url", `http://localhost:${server.port}`, "--no-autoupdate"];
+if (process.env.TUNNEL_PROTOCOL) tunnelArgs.push("--protocol", process.env.TUNNEL_PROTOCOL);
+const tunnel = spawn("cloudflared", tunnelArgs, { stdio: ["ignore", "pipe", "pipe"] });
 children.push(tunnel);
 tunnel.on("error", () => {
   console.log(

@@ -5,7 +5,9 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { privateKeyToAccount } from "viem/accounts";
 import { eip712Domain, type ClientMsg, type MatchLog, type ServerMsg } from "@playpot/game";
 import type { Address, Hex } from "viem";
+import { isAddress } from "viem";
 import { Chain } from "./chain.ts";
+import { Snapshots } from "./state.ts";
 import { Room } from "./room.ts";
 
 export interface ServerConfig {
@@ -29,6 +31,7 @@ export async function startServer(cfg: ServerConfig) {
   const domain = eip712Domain(chain.chainId, cfg.escrow);
   const tokenAddr = await chain.token();
   mkdirSync(cfg.dataDir, { recursive: true });
+  const snapshots = new Snapshots(chain, tokenAddr);
 
   const rooms = new Map<string, Room>();
   const subs = new Map<string, Set<WebSocket>>();
@@ -186,6 +189,17 @@ export async function startServer(cfg: ServerConfig) {
         const upstream = await fetch(cfg.rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
         res.writeHead(upstream.status, { "content-type": "application/json" });
         return void res.end(await upstream.text());
+      }
+      if (url.pathname === "/state") {
+        const addr = url.searchParams.get("addr");
+        const matchId = url.searchParams.get("match");
+        const [shared, account, view] = await Promise.all([
+          snapshots.getShared(),
+          addr && isAddress(addr) ? snapshots.getAccount(addr) : undefined,
+          matchId && /^\d+$/.test(matchId) ? snapshots.getMatch(BigInt(matchId)) : undefined,
+        ]);
+        res.writeHead(200, { "content-type": "application/json" });
+        return void res.end(JSON.stringify({ ...shared, account, view }, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
       }
       const m = url.pathname.match(/^\/log\/(\d+)$/);
       if (m) return json(200, (await getRoom(m[1])).log);

@@ -2,6 +2,8 @@
 // Usage: (cd contracts && forge build) && node scripts/ui-test.ts   (set CHROMIUM=/path/to/chrome if needed)
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
+import nodeHttp from "node:http";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -10,6 +12,36 @@ import { createPublicClient, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { startServer } from "../packages/server/src/main.ts";
 import { deployContracts } from "./lib.ts";
+
+// LATENCY_MS=3000 puts a delay in front of the server (like a slow tunnel) to prove the client copes.
+const LATENCY = Number(process.env.LATENCY_MS ?? 0);
+const TO = LATENCY ? 150_000 : 20_000;
+const sleep = (n: number) => new Promise((r) => setTimeout(r, n));
+function latencyProxy(target: number, ms: number): Promise<{ port: number; close: () => void }> {
+  const srv = nodeHttp.createServer(async (req, res) => {
+    await sleep(ms);
+    const up = nodeHttp.request({ host: "127.0.0.1", port: target, method: req.method, path: req.url, headers: req.headers }, async (ur) => {
+      await sleep(ms);
+      res.writeHead(ur.statusCode ?? 502, ur.headers);
+      ur.pipe(res);
+    });
+    up.on("error", () => res.writeHead(502).end());
+    req.pipe(up);
+  });
+  srv.on("upgrade", (req, socket, head) => {
+    const up = net.connect(target, "127.0.0.1", () => {
+      const lines = [`${req.method} ${req.url} HTTP/1.1`];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+      up.write(lines.join("\r\n") + "\r\n\r\n");
+      up.write(head);
+      socket.pipe(up);
+      up.pipe(socket);
+    });
+    up.on("error", () => socket.destroy());
+    socket.on("error", () => up.destroy());
+  });
+  return new Promise((ok) => srv.listen(0, "127.0.0.1", () => ok({ port: (srv.address() as net.AddressInfo).port, close: () => srv.close() })));
+}
 
 const ANVIL_PORT = 18546;
 const RPC = `http://127.0.0.1:${ANVIL_PORT}`;
@@ -52,8 +84,10 @@ try {
     webDir: "packages/web/dist",
     proxyRpc: true,
   });
-  const webUrl = `http://127.0.0.1:${server.port}`;
+  const slow = LATENCY ? await latencyProxy(server.port, LATENCY) : undefined;
+  const webUrl = `http://127.0.0.1:${slow?.port ?? server.port}`;
   const serverUrl = webUrl;
+  if (slow) console.log(`simulating ${LATENCY}ms latency each way`);
   console.log(`web ${webUrl}  referee ${serverUrl}`);
 
   browser = await chromium.launch({
@@ -69,7 +103,7 @@ try {
     return page;
   };
   const text = async (p: Page, sel: string) => ((await p.textContent(sel)) ?? "").trim();
-  const waitText = (p: Page, sel: string, re: RegExp, timeout = 20000) =>
+  const waitText = (p: Page, sel: string, re: RegExp, timeout = TO) =>
     p.waitForFunction(([s, r]) => new RegExp(r).test(document.querySelector(s as string)?.textContent ?? ""), [sel, re.source], { timeout });
   const msgDone = (p: Page, label: string) => waitText(p, "#msg", new RegExp(`${label}: done`));
 
@@ -91,13 +125,13 @@ try {
   await waitText(alice, "#tokens", /^990/);
   console.log("alice: offer created (10 tPUSD locked)");
 
-  await bob.waitForSelector('[data-act="challenge"]:not([disabled])', { timeout: 15000 });
+  await bob.waitForSelector('[data-act="challenge"]:not([disabled])', { timeout: TO });
   await bob.click('[data-act="challenge"]');
-  await bob.waitForSelector("#match", { timeout: 20000 });
+  await bob.waitForSelector("#match", { timeout: TO });
   await waitText(bob, "#chain-status", /active/);
   console.log("bob: challenged, match open");
 
-  await alice.waitForSelector('[data-act="open"]', { timeout: 15000 });
+  await alice.waitForSelector('[data-act="open"]', { timeout: TO });
   await alice.click('[data-act="open"]');
   await alice.waitForSelector("#match");
 
@@ -105,7 +139,7 @@ try {
 
   const play = async (p: Page, cell: number) => {
     const sel = `[data-cell="${cell}"].mine:not([disabled])`;
-    await p.waitForSelector(sel, { timeout: 15000 });
+    await p.waitForSelector(sel, { timeout: TO });
     await p.click(sel);
   };
   await play(alice, 0);
