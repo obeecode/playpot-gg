@@ -85,10 +85,10 @@ You need a normal browser and internet access for the faucet steps.
 3. **Deploy.**
    ```bash
    cd contracts
-   REFEREE=<referee address> forge script script/Deploy.s.sol \
+   REFEREE=<referee address> TREASURY=<address you control> forge script script/Deploy.s.sol \
      --rpc-url https://sepolia.base.org --account deployer --broadcast
    ```
-   To publish the verified source on the block explorer (so anyone can read exactly what the contract does), get a free Etherscan API key and add `--verify --etherscan-api-key <key>` to that command. The compiler settings are pinned in `contracts/foundry.toml` (solc 0.8.28, optimizer 200 runs, cancun). Note the printed `ESCROW` address. Optional env: `TREASURY`, `RAKE_BPS` (max 1000), `CHALLENGE_WINDOW`, `MATCH_DURATION`, `ABORT_GRACE`, `DISPUTE_BOND`.
+   To publish the verified source on the block explorer (so anyone can read exactly what the contract does), get a free Etherscan API key and add `--verify --etherscan-api-key <key>` to that command. The compiler settings are pinned in `contracts/foundry.toml` (solc 0.8.28, optimizer 200 runs, cancun). Note the printed `ESCROW` address. `TREASURY` receives the rake and cannot be changed later. Optional env: `RAKE_BPS` (max 1000), `CHALLENGE_WINDOW`, `MATCH_DURATION`, `ABORT_GRACE`, `DISPUTE_BOND`.
 4. **Run the referee** somewhere your friend can reach it:
    ```bash
    RPC_URL=https://sepolia.base.org ESCROW=<escrow> REFEREE_PK=<referee private key> \
