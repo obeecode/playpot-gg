@@ -57,6 +57,20 @@ npm run web     # shell 2: Vite on :5173
 
 Open `http://localhost:5173/?burner=alice` and `http://localhost:5173/?burner=bob` in two windows (use two different browser profiles or a private window for one). The `burner` flag uses a local throwaway key instead of a wallet. On a local chain, use **Dev: 10 ETH**, **Mint 1000 test tokens**, then create an offer in one window and challenge it in the other.
 
+## Play with a friend in one command (no faucet, no server)
+
+Runs a throwaway local chain on your computer and shares it through a free Cloudflare quick tunnel.
+
+```bash
+winget install --id Cloudflare.cloudflared   # Windows (Mac: brew install cloudflared); then open a NEW terminal
+cd contracts && forge build && cd ..
+npm run live
+```
+
+It prints a `https://<random>.trycloudflare.com` link. Open it yourself and send it to your friend. Each of you gets a burner wallet automatically (if you have MetaMask installed, click **Use burner wallet**). Click **Dev: 10 ETH**, then **Mint 1000 test tokens**; one creates an offer and the other clicks **Challenge**.
+
+The referee serves the site and a restricted chain proxy on that one address, so nothing else needs to be reachable. The link changes every run, the chain resets when you stop, and anyone with the link can play, so share it privately. The anvil dev keys are public, so this mode generates fresh random keys for the deployer and referee.
+
 ## Deploy to Base Sepolia (play with a friend)
 
 You need a normal browser and internet access for the faucet steps.

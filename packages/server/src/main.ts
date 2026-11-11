@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join, normalize, resolve, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { privateKeyToAccount } from "viem/accounts";
 import { eip712Domain, type ClientMsg, type MatchLog, type ServerMsg } from "@playpot/game";
@@ -17,6 +17,8 @@ export interface ServerConfig {
   port: number;
   dataDir: string;
   resultWaitMs: number;
+  webDir?: string; // serve the built web client from this folder
+  proxyRpc?: boolean; // expose a restricted /rpc proxy so browsers need no direct chain access (local chains)
 }
 
 export async function startServer(cfg: ServerConfig) {
@@ -104,6 +106,65 @@ export async function startServer(cfg: ServerConfig) {
     res.setHeader("access-control-allow-origin", "*");
     res.setHeader("access-control-allow-headers", "*");
   };
+  const MIME: Record<string, string> = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".svg": "image/svg+xml",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+  };
+  const serveStatic = (pathname: string, res: ServerResponse): boolean => {
+    if (!cfg.webDir) return false;
+    const root = resolve(cfg.webDir);
+    let file: string;
+    try {
+      file = normalize(join(root, decodeURIComponent(pathname)));
+    } catch {
+      return false;
+    }
+    if (file !== root && !file.startsWith(root + sep)) return false;
+    if (!existsSync(file) || !statSync(file).isFile()) file = join(root, "index.html");
+    if (!existsSync(file)) return false;
+    const ext = file.slice(file.lastIndexOf("."));
+    res.writeHead(200, { "content-type": MIME[ext] ?? "application/octet-stream" });
+    res.end(readFileSync(file));
+    return true;
+  };
+
+  // Browsers on a local chain talk to it through this proxy. Wallet-style methods that act as the node's
+  // unlocked accounts are blocked, and funding may not touch the referee/relayer account.
+  const RPC_BLOCKED = new Set(["eth_sendTransaction", "eth_accounts", "eth_coinbase", "eth_sign", "eth_signTransaction"]);
+  const protectedAddrs = new Set([referee.address.toLowerCase(), relayer.address.toLowerCase()]);
+  const rpcAllowed = (c: { method?: unknown; params?: unknown[] }): boolean => {
+    const m = typeof c?.method === "string" ? c.method : "";
+    if (m === "anvil_setBalance") {
+      const [target, value] = (c.params ?? []) as [string, string];
+      return (
+        typeof target === "string" &&
+        !protectedAddrs.has(target.toLowerCase()) &&
+        typeof value === "string" &&
+        BigInt(value) <= 100n * 10n ** 18n
+      );
+    }
+    return (m.startsWith("eth_") && !RPC_BLOCKED.has(m) && !m.startsWith("eth_signTypedData")) || m === "net_version" || m === "web3_clientVersion";
+  };
+  const readBody = (req: IncomingMessage): Promise<string> =>
+    new Promise((ok, fail) => {
+      let size = 0;
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => {
+        size += c.length;
+        if (size > 256_000) {
+          fail(new Error("body too large"));
+          req.destroy();
+        } else chunks.push(c);
+      });
+      req.on("end", () => ok(Buffer.concat(chunks).toString()));
+      req.on("error", fail);
+    });
+
   const http = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     cors(res);
     if (req.method === "OPTIONS") return void res.writeHead(204).end();
@@ -114,10 +175,21 @@ export async function startServer(cfg: ServerConfig) {
     };
     try {
       if (url.pathname === "/config") {
-        return json(200, { chainId: chain.chainId, escrow: cfg.escrow, token: tokenAddr, referee: referee.address, rpcUrl: cfg.publicRpcUrl ?? cfg.rpcUrl });
+        const proto = String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0];
+        const rpcUrl = cfg.proxyRpc ? `${proto}://${req.headers.host}/rpc` : (cfg.publicRpcUrl ?? cfg.rpcUrl);
+        return json(200, { chainId: chain.chainId, escrow: cfg.escrow, token: tokenAddr, referee: referee.address, rpcUrl });
+      }
+      if (url.pathname === "/rpc" && cfg.proxyRpc && req.method === "POST") {
+        const body = JSON.parse(await readBody(req));
+        const calls = Array.isArray(body) ? body : [body];
+        if (!calls.every(rpcAllowed)) return json(403, { error: "rpc method not allowed" });
+        const upstream = await fetch(cfg.rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        res.writeHead(upstream.status, { "content-type": "application/json" });
+        return void res.end(await upstream.text());
       }
       const m = url.pathname.match(/^\/log\/(\d+)$/);
       if (m) return json(200, (await getRoom(m[1])).log);
+      if (req.method === "GET" && serveStatic(url.pathname, res)) return;
       json(404, { error: "not found" });
     } catch (e) {
       json(404, { error: (e as Error).message });
@@ -167,6 +239,8 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
     port: Number(process.env.PORT ?? 8787),
     dataDir: process.env.DATA_DIR ?? "data",
     resultWaitMs: Number(process.env.RESULT_WAIT_MS ?? 15000),
+    webDir: process.env.WEB_DIR,
+    proxyRpc: process.env.PROXY_RPC === "1",
   });
   console.log(`referee ${s.referee} listening on :${s.port}`);
 }

@@ -1,12 +1,11 @@
 // Drives the real web client in headless Chromium: Alice creates an offer, Bob challenges, they play, payout, claim.
 // Usage: (cd contracts && forge build) && node scripts/ui-test.ts   (set CHROMIUM=/path/to/chrome if needed)
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { chromium, type Page } from "playwright-core";
-import { createServer } from "vite";
 import { createPublicClient, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { startServer } from "../packages/server/src/main.ts";
@@ -19,9 +18,11 @@ const REFEREE = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b786
 const SHOTS = process.env.SHOTS_DIR ?? join(tmpdir(), "playpot-shots");
 mkdirSync(SHOTS, { recursive: true });
 
+const built = spawnSync("npm", ["run", "build", "-w", "@playpot/web"], { stdio: "ignore", shell: true });
+if (built.status !== 0) throw new Error("web build failed");
+
 const anvil = spawn(process.env.ANVIL ?? "anvil", ["--port", String(ANVIL_PORT), "--silent"], { stdio: "ignore" });
 let code = 0;
-let vite: Awaited<ReturnType<typeof createServer>> | undefined;
 let server: Awaited<ReturnType<typeof startServer>> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
@@ -48,11 +49,11 @@ try {
     port: 0,
     dataDir: mkdtempSync(join(tmpdir(), "playpot-ui-")),
     resultWaitMs: 4000,
+    webDir: "packages/web/dist",
+    proxyRpc: true,
   });
-  vite = await createServer({ root: "packages/web", logLevel: "error", server: { port: 0, host: "127.0.0.1" } });
-  await vite.listen();
-  const webUrl = vite.resolvedUrls!.local[0].replace(/\/$/, "");
-  const serverUrl = `http://127.0.0.1:${server.port}`;
+  const webUrl = `http://127.0.0.1:${server.port}`;
+  const serverUrl = webUrl;
   console.log(`web ${webUrl}  referee ${serverUrl}`);
 
   browser = await chromium.launch({
@@ -63,7 +64,7 @@ try {
     const ctx = await browser!.newContext({ viewport: { width: 900, height: 900 } });
     const page = await ctx.newPage();
     page.on("pageerror", (e) => console.log(`[${name} pageerror]`, e.message));
-    await page.goto(`${webUrl}/?burner=${name}&server=${encodeURIComponent(serverUrl)}`);
+    await page.goto(`${webUrl}/?burner=${name}`);
     await page.waitForSelector("#addr");
     return page;
   };
@@ -143,7 +144,6 @@ try {
   code = 1;
 } finally {
   await browser?.close();
-  await vite?.close();
   await server?.close();
   anvil.kill();
   process.exit(code);

@@ -154,9 +154,9 @@ const loadSk = (id: bigint): LocalAccount | null => {
 
 async function init() {
   S.serverUrl =
-    params.get("server") ??
-    (import.meta.env.VITE_SERVER_URL as string | undefined) ??
-    localStorage.getItem("playpot:server") ??
+    params.get("server") ||
+    (import.meta.env.VITE_SERVER_URL as string | undefined) ||
+    (import.meta.env.PROD ? location.origin : localStorage.getItem("playpot:server")) ||
     "http://127.0.0.1:8787";
   try {
     const cfg = (await (await fetch(`${S.serverUrl}/config`)).json()) as Config;

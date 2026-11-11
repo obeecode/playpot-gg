@@ -17,7 +17,8 @@
     "dev": "node scripts/dev.ts",
     "ui-test": "node scripts/ui-test.ts",
     "test": "npm run test:contracts && npm run test:game && npm run typecheck && npm run e2e && npm run ui-test",
-    "build:web": "npm run build -w @playpot/web"
+    "build:web": "npm run build -w @playpot/web",
+    "live": "node scripts/live.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
