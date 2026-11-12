@@ -3,12 +3,14 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { join, normalize, resolve, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { privateKeyToAccount } from "viem/accounts";
-import { eip712Domain, type ClientMsg, type MatchLog, type ServerMsg } from "@playpot/game";
+import { eip712Domain, jinxDomain, jinxEscrowAbi, type ClientMsg, type MatchLog, type ServerMsg } from "@playpot/game";
 import type { Address, Hex } from "viem";
 import { isAddress } from "viem";
 import { Chain } from "./chain.ts";
 import { Snapshots } from "./state.ts";
 import { Room } from "./room.ts";
+import { JinxHost } from "./jinxHost.ts";
+import type { JinxRoomOptions } from "./jinxRoom.ts";
 
 export interface ServerConfig {
   rpcUrl: string;
@@ -19,6 +21,9 @@ export interface ServerConfig {
   port: number;
   dataDir: string;
   resultWaitMs: number;
+  jinxEscrow?: Address; // also run JINX matches for this escrow
+  jinxRoom?: JinxRoomOptions;
+  clock?: () => number; // tests inject a fake clock
   webDir?: string; // serve the built web client from this folder
   proxyRpc?: boolean; // expose a restricted /rpc proxy so browsers need no direct chain access (local chains)
 }
@@ -33,6 +38,17 @@ export async function startServer(cfg: ServerConfig) {
   mkdirSync(cfg.dataDir, { recursive: true });
   const snapshots = new Snapshots(chain, tokenAddr);
 
+  const clock = cfg.clock ?? Date.now;
+  let jinxChain: Chain | undefined;
+  let jinxSnapshots: Snapshots | undefined;
+  let jinxToken: Address | undefined;
+  if (cfg.jinxEscrow) {
+    jinxChain = new Chain(cfg.rpcUrl, cfg.jinxEscrow, relayer, jinxEscrowAbi);
+    await jinxChain.init();
+    jinxToken = await jinxChain.token();
+    jinxSnapshots = new Snapshots(jinxChain, jinxToken);
+  }
+
   const rooms = new Map<string, Room>();
   const subs = new Map<string, Set<WebSocket>>();
   const timers = new Map<string, NodeJS.Timeout>();
@@ -40,11 +56,44 @@ export async function startServer(cfg: ServerConfig) {
   const persist = (room: Room) => writeFileSync(logPath(room.info.matchId.toString()), JSON.stringify(room.log, null, 2));
   const send = (ws: WebSocket, m: ServerMsg) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
   const broadcast = (id: string, m: ServerMsg) => subs.get(id)?.forEach((ws) => send(ws, m));
+  const jinxHost = jinxChain
+    ? new JinxHost({
+        chain: jinxChain,
+        referee,
+        domain: jinxDomain(chain.chainId, jinxChain.escrow),
+        dataDir: cfg.dataDir,
+        resultWaitMs: cfg.resultWaitMs,
+        clock,
+        room: cfg.jinxRoom,
+        send: (ws, m) => send(ws, m),
+      })
+    : undefined;
   const statusOf = (r: Room) => (r.settled ? "settled" : r.ended ? "ended" : "active") as "active" | "ended" | "settled";
 
-  async function getRoom(id: string): Promise<Room> {
+  const loadingRooms = new Map<string, Promise<Room>>();
+  /** One room per match, even when both players join at the same moment. */
+  function getRoom(id: string): Promise<Room> {
     const existing = rooms.get(id);
-    if (existing) return existing;
+    if (existing) return Promise.resolve(existing);
+    let pending = loadingRooms.get(id);
+    if (!pending) {
+      pending = loadRoom(id).then(
+        (room) => {
+          rooms.set(id, room);
+          loadingRooms.delete(id);
+          return room;
+        },
+        (err) => {
+          loadingRooms.delete(id);
+          throw err;
+        },
+      );
+      loadingRooms.set(id, pending);
+    }
+    return pending;
+  }
+
+  async function loadRoom(id: string): Promise<Room> {
     const matchId = BigInt(id);
     const m = await chain.getMatch(matchId);
     if (m.status === 0) throw new Error("unknown match");
@@ -54,7 +103,6 @@ export async function startServer(cfg: ServerConfig) {
     const saved = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as MatchLog) : undefined;
     const room = new Room(info, referee, domain, saved);
     if (m.status >= 2) room.settled = true;
-    rooms.set(id, room);
     return room;
   }
 
@@ -180,7 +228,14 @@ export async function startServer(cfg: ServerConfig) {
       if (url.pathname === "/config") {
         const proto = String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0];
         const rpcUrl = cfg.proxyRpc ? `${proto}://${req.headers.host}/rpc` : (cfg.publicRpcUrl ?? cfg.rpcUrl);
-        return json(200, { chainId: chain.chainId, escrow: cfg.escrow, token: tokenAddr, referee: referee.address, rpcUrl });
+        return json(200, {
+          chainId: chain.chainId,
+          escrow: cfg.escrow,
+          token: tokenAddr,
+          referee: referee.address,
+          rpcUrl,
+          jinx: jinxChain ? { escrow: jinxChain.escrow, token: jinxToken } : undefined,
+        });
       }
       if (url.pathname === "/rpc" && cfg.proxyRpc && req.method === "POST") {
         const body = JSON.parse(await readBody(req));
@@ -193,13 +248,20 @@ export async function startServer(cfg: ServerConfig) {
       if (url.pathname === "/state") {
         const addr = url.searchParams.get("addr");
         const matchId = url.searchParams.get("match");
+        const snap = url.searchParams.get("game") === "jinx" ? jinxSnapshots : snapshots;
+        if (!snap) return json(404, { error: "game not enabled" });
         const [shared, account, view] = await Promise.all([
-          snapshots.getShared(),
-          addr && isAddress(addr) ? snapshots.getAccount(addr) : undefined,
-          matchId && /^\d+$/.test(matchId) ? snapshots.getMatch(BigInt(matchId)) : undefined,
+          snap.getShared(),
+          addr && isAddress(addr) ? snap.getAccount(addr) : undefined,
+          matchId && /^\d+$/.test(matchId) ? snap.getMatch(BigInt(matchId)) : undefined,
         ]);
         res.writeHead(200, { "content-type": "application/json" });
         return void res.end(JSON.stringify({ ...shared, account, view }, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
+      }
+      const jl = url.pathname.match(/^\/jinx-log\/(\d+)$/);
+      if (jl && jinxHost) {
+        const log = jinxHost.logFor(jl[1]);
+        return log ? json(200, log) : json(404, { error: "no log for that match" });
       }
       const m = url.pathname.match(/^\/log\/(\d+)$/);
       if (m) return json(200, (await getRoom(m[1])).log);
@@ -219,10 +281,19 @@ export async function startServer(cfg: ServerConfig) {
       } catch {
         return send(ws, { type: "error", message: "bad json" });
       }
+      if (msg.type.startsWith("jinx-")) {
+        if (!jinxHost) return send(ws, { type: "error", message: "JINX is not enabled on this server" });
+        jinxHost.handle(ws, msg as Extract<ClientMsg, { type: `jinx-${string}` }>).catch((e: Error) => send(ws, { type: "error", message: e.message }));
+        return;
+      }
       onMessage(ws, msg).catch((e: Error) => send(ws, { type: "error", message: e.message }));
     });
-    ws.on("close", () => subs.forEach((s) => s.delete(ws)));
+    ws.on("close", () => {
+      subs.forEach((s) => s.delete(ws));
+      jinxHost?.drop(ws);
+    });
   });
+  const jinxTimer = jinxHost ? setInterval(() => void jinxHost.tick(), 100) : undefined;
 
   await new Promise<void>((r) => http.listen(cfg.port, r));
   const port = (http.address() as { port: number }).port;
@@ -231,6 +302,8 @@ export async function startServer(cfg: ServerConfig) {
     referee: referee.address,
     close: async () => {
       timers.forEach(clearTimeout);
+      clearInterval(jinxTimer);
+      jinxHost?.close();
       wss.clients.forEach((c) => c.terminate());
       await new Promise<void>((r) => http.close(() => r()));
     },
@@ -248,6 +321,7 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
     rpcUrl: process.env.RPC_URL ?? "http://127.0.0.1:8545",
     publicRpcUrl: process.env.PUBLIC_RPC_URL,
     escrow: need("ESCROW") as Address,
+    jinxEscrow: process.env.JINX_ESCROW as Address | undefined,
     refereePk: need("REFEREE_PK") as Hex,
     relayerPk: process.env.RELAYER_PK as Hex | undefined,
     port: Number(process.env.PORT ?? 8787),

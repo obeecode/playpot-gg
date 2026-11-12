@@ -50,3 +50,30 @@ export async function deployContracts(p: DeployParams): Promise<{ token: Address
   });
   return { token, escrow: er.contractAddress! };
 }
+
+/** Deploys JinxEscrow against an existing token (needs `forge build` first). */
+export async function deployJinx(
+  p: DeployParams & { token: Address },
+): Promise<Address> {
+  const pub = createPublicClient({ transport: http(p.rpc) });
+  const dep = createWalletClient({ account: privateKeyToAccount(p.deployerPk), transport: http(p.rpc) });
+  const j = artifact("JinxEscrow");
+  const r = await pub.waitForTransactionReceipt({
+    hash: await dep.deployContract({
+      chain: null,
+      abi: j.abi as never,
+      bytecode: j.bytecode,
+      args: [
+        p.token,
+        p.referee,
+        p.treasury,
+        p.rakeBps ?? 300,
+        p.challengeWindow ?? 1800,
+        p.matchDuration ?? 7200,
+        p.abortGrace ?? 600,
+        p.bond ?? 5_000_000n,
+      ] as never,
+    }),
+  });
+  return r.contractAddress!;
+}

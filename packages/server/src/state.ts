@@ -1,5 +1,5 @@
 import type { Address } from "viem";
-import { potEscrowAbi, testTokenAbi } from "@playpot/game";
+import { testTokenAbi } from "@playpot/game";
 import type { Chain } from "./chain.ts";
 
 const MULTICALL3: Address = "0xcA11bde05977b3631167028862bE2a173976CA11";
@@ -34,7 +34,7 @@ export class Snapshots {
 
   private read(functionName: string, args: unknown[] = []) {
     const { pub, escrow } = this.chain;
-    return pub.readContract({ address: escrow, abi: potEscrowAbi, functionName, args } as never) as Promise<never>;
+    return pub.readContract({ address: escrow, abi: this.chain.abi, functionName, args } as never) as Promise<never>;
   }
 
   private async loadShared() {
@@ -48,8 +48,8 @@ export class Snapshots {
     const ids: bigint[] = [];
     for (let i = from; i < nextId; i++) ids.push(i);
     const calls = ids.flatMap((id) => [
-      { address: escrow, abi: potEscrowAbi, functionName: "offers", args: [id] },
-      { address: escrow, abi: potEscrowAbi, functionName: "getMatch", args: [id] },
+      { address: escrow, abi: this.chain.abi, functionName: "offers", args: [id] },
+      { address: escrow, abi: this.chain.abi, functionName: "getMatch", args: [id] },
     ]);
     let out: unknown[] = [];
     if (ids.length) {
@@ -64,10 +64,18 @@ export class Snapshots {
       }
     }
     const rows = ids.map((id, i) => {
-      const o = out[2 * i] as readonly [Address, Address, bigint, bigint, boolean];
+      const o = out[2 * i] as readonly unknown[];
+      const jinx = o.length === 6; // JINX offers carry bestOf before the open flag
       return {
         id,
-        offer: { creator: o[0], sessionKey: o[1], stake: o[2], expiry: o[3], open: o[4] },
+        offer: {
+          creator: o[0],
+          sessionKey: o[1],
+          stake: o[2],
+          expiry: o[3],
+          bestOf: jinx ? o[4] : undefined,
+          open: jinx ? o[5] : o[4],
+        },
         match: out[2 * i + 1],
       };
     });
