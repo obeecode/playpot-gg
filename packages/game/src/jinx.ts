@@ -9,6 +9,7 @@ export const P2 = 2;
 export const DEAD = 3;
 export const REOPEN_TURNS = 2; // death match: a jinxed square reopens after this many turns
 export const MISS_LIMIT = 2; // consecutive missed picks that forfeit a game
+export const MAX_MATCH_TURNS = 120; // a match still undecided after this many turns is abandoned and refunded
 
 export const LINES: readonly (readonly number[])[] = (() => {
   const lines: number[][] = [];
@@ -48,6 +49,7 @@ export interface TurnResult {
   doubleWin: boolean;
   cleared: boolean; // death match: a full board with no possible line was wiped
   forfeit: 0 | 1 | 2; // which player forfeited (0 none)
+  doubleForfeit: boolean; // both players stopped picking: the match is abandoned and both stakes are refunded
   winLine: number[];
 }
 
@@ -127,7 +129,7 @@ export function applyTurn(prev: GameState, a: PickOrMiss, b: PickOrMiss): TurnRe
     lb = [];
   }
 
-  const result: TurnResult = { state, outcome: "ongoing", jinx, doubleWin, cleared: false, forfeit: 0, winLine: [] };
+  const result: TurnResult = { state, outcome: "ongoing", jinx, doubleWin, cleared: false, forfeit: 0, doubleForfeit: false, winLine: [] };
   const f1 = state.miss[0] >= MISS_LIMIT;
   const f2 = state.miss[1] >= MISS_LIMIT;
 
@@ -136,6 +138,7 @@ export function applyTurn(prev: GameState, a: PickOrMiss, b: PickOrMiss): TurnRe
     result.winLine = [...new Set((la.length ? la : lb).flat())];
   } else if (f1 && f2) {
     result.outcome = "draw";
+    result.doubleForfeit = true;
   } else if (f1 || f2) {
     result.forfeit = f1 ? 1 : 2;
     result.outcome = f1 ? "p2" : "p1";
