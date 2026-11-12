@@ -16,12 +16,13 @@
     "web": "npm run dev -w @playpot/web",
     "dev": "node scripts/dev.ts",
     "ui-test": "node scripts/ui-test.ts",
-    "test": "npm run test:contracts && npm run test:game && npm run test:verify && npm run typecheck && npm run e2e && npm run ui-test",
+    "test": "npm run test:contracts && npm run test:game && npm run test:verify && npm run test:server && npm run typecheck && npm run e2e && npm run ui-test",
     "build:web": "npm run build -w @playpot/web && node scripts/hash-dist.ts packages/web/dist",
     "live": "node scripts/live.ts",
     "hash:web": "node scripts/hash-dist.ts packages/web/dist",
     "verify:site": "node scripts/verify-site.ts",
-    "test:verify": "node --test scripts/verify-site.test.ts"
+    "test:verify": "node --test scripts/verify-site.test.ts",
+    "test:server": "npm test -w @playpot/server"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
