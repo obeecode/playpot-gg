@@ -382,7 +382,7 @@ try {
   {
     const { id, p1, p2 } = await newMatch(3, [0, 1, 0, 1], []);
     for (let t = 0; t < 4; t++) {
-      await until(`alice to commit turn ${t}`, () => p1.committedTurns.has(t));
+      await until(`the referee to receipt alice's commitment for turn ${t}`, () => p1.receipts.has(t));
       fake += 12_000; // run out the clock for bob
       await until(`turn ${t} to resolve`, () => p1.entries.length > t);
     }

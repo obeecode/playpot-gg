@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { createPublicClient, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { startServer } from "../packages/server/src/main.ts";
-import { deployContracts } from "./lib.ts";
+import { deployContracts, deployJinx } from "./lib.ts";
 
 const PORT = Number(process.env.ANVIL_PORT ?? 8545);
 const RPC = `http://127.0.0.1:${PORT}`;
@@ -32,18 +32,27 @@ const { token, escrow } = await deployContracts({
   treasury: TREASURY,
   challengeWindow: Number(process.env.CHALLENGE_WINDOW ?? 1800),
 });
+const jinxEscrow = await deployJinx({
+  rpc: RPC,
+  deployerPk: DEPLOYER,
+  referee: privateKeyToAccount(REFEREE).address,
+  treasury: TREASURY,
+  token,
+  challengeWindow: Number(process.env.CHALLENGE_WINDOW ?? 1800),
+});
 mkdirSync("deployments", { recursive: true });
-writeFileSync("deployments/local.json", JSON.stringify({ chainId: 31337, token, escrow }, null, 2));
+writeFileSync("deployments/local.json", JSON.stringify({ chainId: 31337, token, escrow, jinxEscrow }, null, 2));
 
 const server = await startServer({
   rpcUrl: RPC,
   escrow,
+  jinxEscrow,
   refereePk: REFEREE,
   port: Number(process.env.PORT ?? 8787),
   dataDir: process.env.DATA_DIR ?? "data",
   resultWaitMs: Number(process.env.RESULT_WAIT_MS ?? 15000),
 });
-console.log(`anvil ${RPC}\ntoken  ${token}\nescrow ${escrow}\nreferee server http://127.0.0.1:${server.port}`);
+console.log(`anvil ${RPC}\ntoken  ${token}\nescrow ${escrow}\njinx   ${jinxEscrow}\nreferee server http://127.0.0.1:${server.port}`);
 console.log("Now run `npm run web` and open the printed Vite URL. Ctrl+C to stop.");
 
 const stop = () => {

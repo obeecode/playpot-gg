@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { createPublicClient, http, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { startServer } from "../packages/server/src/main.ts";
-import { deployContracts } from "./lib.ts";
+import { deployContracts, deployJinx } from "./lib.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const existing = Boolean(process.env.ESCROW && process.env.REFEREE_PK);
@@ -35,6 +35,7 @@ if (existing) {
     rpcUrl: rpc,
     publicRpcUrl: process.env.PUBLIC_RPC_URL ?? rpc,
     escrow: process.env.ESCROW as Address,
+    jinxEscrow: process.env.JINX_ESCROW as Address | undefined,
     refereePk: process.env.REFEREE_PK as Hex,
     port: PORT,
     dataDir: process.env.DATA_DIR ?? "data",
@@ -75,16 +76,25 @@ if (existing) {
     });
   }
 
-  const { escrow } = await deployContracts({
+  const { escrow, token } = await deployContracts({
     rpc: RPC,
     deployerPk,
     referee: referee.address,
     treasury,
     challengeWindow: Number(process.env.CHALLENGE_WINDOW ?? 1800),
   });
+  const jinxEscrow = await deployJinx({
+    rpc: RPC,
+    deployerPk,
+    referee: referee.address,
+    treasury,
+    token,
+    challengeWindow: Number(process.env.CHALLENGE_WINDOW ?? 1800),
+  });
   server = await startServer({
     rpcUrl: RPC,
     escrow,
+    jinxEscrow,
     refereePk,
     port: PORT,
     dataDir: process.env.DATA_DIR ?? "data",

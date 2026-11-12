@@ -38,11 +38,15 @@ cd contracts && forge build && cd ..
 ## Run the tests
 
 ```bash
-npm run test:contracts   # 33 Foundry tests: every settlement path, forgery cases, invariants
+npm run test:contracts   # 63 Foundry tests: both escrows, every settlement path, forgery cases, invariants, JINX rules parity
 npm run test:game        # rules (exhaustive game count) + log verification
+npm run test:server      # the JINX referee room: clock, misses, receipts, rejections
+npm run test:verify      # the site verifier
 npm run typecheck
-npm run e2e              # local anvil + referee + two signing clients, all settlement paths
-npm run ui-test          # headless Chromium plays a full game through the web client
+npm run e2e              # tic-tac-toe: local anvil + referee + two signing clients, all settlement paths
+npm run e2e:jinx         # JINX: real matches over WebSocket, the false-miss dispute, clock forfeits, refund
+npm run ui-test          # headless Chromium plays a full tic-tac-toe game through the web client
+npm run ui-test:jinx     # headless Chromium plays a full JINX best-of-3 through the web client
 npm test                 # all of the above
 ```
 
@@ -124,6 +128,25 @@ You need a normal browser and internet access for the faucet steps.
 3. Open `https://app.playpot.gg`. The client is built to talk to `https://api.playpot.gg`.
 
 Use a keyed RPC (Alchemy, QuickNode) in `RPC_URL` for the server, and keep it out of the browser by setting a different `PUBLIC_RPC_URL`.
+
+## JINX
+
+Simultaneous-move tic-tac-toe on a 5x5 board: both players pick a square at the same moment, and if you pick the same square it is jinxed and dead. Three in a row wins; a best-of-3 or best-of-5 is one pot. The rules, clock and match structure are in the design doc; `packages/game/src/jinx.ts` is the executable version and `contracts/src/JinxRules.sol` its on-chain twin. 600 seeded games (about 5,000 turns) are generated from the TypeScript rules and replayed in Solidity, comparing the whole board after every turn.
+
+**How picks stay secret and provable.** Each turn a player signs a commitment to their pick (`keccak(match, turn, square, salt)`), the referee returns a signed receipt for it, and only after both have committed are the picks revealed together. A hostile server cannot leak a pick early (it only ever sees a hash first), and a player cannot swap a pick after seeing the other (the commitment binds it). Turns are hash-chained, and each commitment signs the chain head, so a log cannot be reordered or spliced.
+
+**Settlement** follows the tic-tac-toe escrow (`JinxEscrow`): everyone signs for an instant payout, the referee plus one player opens a 30 minute window, and a dispute freezes funds while anyone replays the signed turns on-chain. The contract checks every signature and receipt and runs the rules. A match is capped at 120 turns, and a double forfeit (both players stop picking) refunds both stakes. Worst case replay is about 5.1M gas, under Base's 16.7M cap.
+
+**What is still trusted: the referee's clock.** "You missed the clock" is the referee's word. The one provable fraud is a miss the referee contradicts with its own receipt: if it signed "received your pick at 6.2s" and also "you missed turn 4", the contract voids the miss (`voidMiss`). A pick the referee silently drops cannot be proven. A hardware-attested referee is what closes that.
+
+Play it locally with `npm run live` (the JINX tab). To deploy it next to the existing contracts on Base Sepolia:
+
+```powershell
+cd contracts
+$env:TOKEN = "0x<existing test token>"; $env:REFEREE = "0x<referee>"; $env:TREASURY = "0x<address you control>"
+forge script script/DeployJinx.s.sol --rpc-url https://sepolia.base.org --private-key 0x<deployer key> --broadcast
+```
+then add `$env:JINX_ESCROW = "0x<printed address>"` to the `npm run live` command above.
 
 ## Open source and verifying what is live
 
