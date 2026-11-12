@@ -11,5 +11,7 @@
   "abortGraceSeconds": 600,
   "disputeBond": "5000000",
   "verified": true,
-  "explorer": "https://sepolia.basescan.org/address/0x558f479c8de7019AA26893e743e4e9FF3F989FfD#code"
+  "explorer": "https://sepolia.basescan.org/address/0x558f479c8de7019AA26893e743e4e9FF3F989FfD#code",
+  "jinxEscrow": "0x3cF2006B19758b9c5143Eb71022E7D7cD48c70F4",
+  "jinxMatchDurationSeconds": 7200
 }

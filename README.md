@@ -170,6 +170,7 @@ When you deploy a release, publish its site hash next to the git commit (for exa
 | | Address |
 |---|---|
 | Escrow (`PotEscrow`) | [`0x558f479c8de7019AA26893e743e4e9FF3F989FfD`](https://sepolia.basescan.org/address/0x558f479c8de7019AA26893e743e4e9FF3F989FfD#code) |
+| JINX escrow (`JinxEscrow`) | [`0x3cF2006B19758b9c5143Eb71022E7D7cD48c70F4`](https://sepolia.basescan.org/address/0x3cF2006B19758b9c5143Eb71022E7D7cD48c70F4#code) |
 | Test token (`TestToken`) | [`0x43aD88593cFE37567Aa6385812260446168E2eb7`](https://sepolia.basescan.org/address/0x43aD88593cFE37567Aa6385812260446168E2eb7#code) |
 | Referee signer | `0xC3Abd6eD23D0b57dCBB0fA0C6F4f45eD745d2DB5` |
 | Treasury (receives the rake) | `0x25f2c0C83a53B95De574836671bd9aBB3df77c37` |
