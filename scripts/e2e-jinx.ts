@@ -14,6 +14,7 @@ import {
   jinxChain,
   jinxDomain,
   jinxEscrowAbi,
+  jinxEscrowV2Abi,
   jinxGenesis,
   NO_PICK,
   signCommit,
@@ -29,7 +30,10 @@ import {
   type JinxTurnLog,
 } from "@playpot/game";
 import { startServer } from "../packages/server/src/main.ts";
-import { deployContracts, deployJinx } from "./lib.ts";
+import { deployContracts, deployJinx, deployJinxV2 } from "./lib.ts";
+
+// --v2 (or E2E_V2=1) runs every scenario against JinxEscrowV2 (one flat rake tier, so the arithmetic below is unchanged).
+const V2 = process.argv.includes("--v2") || process.env.E2E_V2 === "1";
 
 const PORT = 18547;
 const RPC = `http://127.0.0.1:${PORT}`;
@@ -217,15 +221,30 @@ try {
 
   log("deploy");
   const { token, escrow } = await deployContracts({ rpc: RPC, deployerPk: KEYS.deployer, referee: wallets.referee.address, treasury: TREASURY, bond: BOND });
-  const jinxEscrow = await deployJinx({ rpc: RPC, deployerPk: KEYS.deployer, referee: wallets.referee.address, treasury: TREASURY, bond: BOND, token, challengeWindow: WINDOW, rakeBps: Number(RAKE_BPS) });
+  const jinxEscrow = V2
+    ? await deployJinxV2({
+        rpc: RPC,
+        deployerPk: KEYS.deployer,
+        refereePk: KEYS.referee,
+        treasury: TREASURY,
+        bond: BOND,
+        token,
+        challengeWindow: WINDOW,
+        rakeFloors: [0n],
+        rakeBpsTiers: [Number(RAKE_BPS)],
+        bondFloor: STAKE,
+        refereeBond: STAKE * 3n,
+      })
+    : await deployJinx({ rpc: RPC, deployerPk: KEYS.deployer, referee: wallets.referee.address, treasury: TREASURY, bond: BOND, token, challengeWindow: WINDOW, rakeBps: Number(RAKE_BPS) });
+  const abi = V2 ? jinxEscrowV2Abi : jinxEscrowAbi;
   ok(`token ${token}`);
   ok(`jinx escrow ${jinxEscrow}`);
   const domain = jinxDomain(chainId, jinxEscrow);
 
   const read = <T,>(fn: string, args: unknown[] = []) =>
-    pub.readContract({ address: jinxEscrow, abi: jinxEscrowAbi, functionName: fn as never, args: args as never } as never) as Promise<T>;
+    pub.readContract({ address: jinxEscrow, abi, functionName: fn as never, args: args as never } as never) as Promise<T>;
   const write = (a: LocalAccount, fn: string, args: unknown[]) =>
-    send(wc(a).writeContract({ chain: null, address: jinxEscrow, abi: jinxEscrowAbi, functionName: fn as never, args: args as never } as never));
+    send(wc(a).writeContract({ chain: null, address: jinxEscrow, abi, functionName: fn as never, args: args as never } as never));
   const claimable = (who: Address) => read<bigint>("claimable", [who]);
   const getMatch = (id: bigint) => read<{ status: number; bestLen: number; bestResult: number }>("getMatch", [id]);
 
@@ -370,7 +389,12 @@ try {
     // Alice holds the referee's own signed receipt for her pick at turn 2.
     const r = p1.receipts.get(2)!;
     assert.ok(r, "alice kept her receipt");
+    const aliceBeforeVoid = await claimable(wallets.alice.address);
     await write(wallets.alice, "voidMiss", [id, 2, 1, r.commitment, BigInt(r.openedMs), BigInt(r.recvMs), r.refSig]);
+    if (V2) {
+      assert.equal((await claimable(wallets.alice.address)) - aliceBeforeVoid, STAKE, "the referee's collateral is slashed to alice");
+      ok("the referee signed a miss and a receipt for the same pick, so one stake of its collateral went to alice");
+    }
     m = await getMatch(id);
     assert.equal(m.bestLen, 0);
     ok("her receipt voided the false miss and cleared the dishonest log");
@@ -458,8 +482,9 @@ try {
   }
 
   const held = (await pub.readContract({ address: token, abi: testTokenAbi, functionName: "balanceOf", args: [jinxEscrow] })) as bigint;
-  const owed = (await claimable(wallets.alice.address)) + (await claimable(wallets.bob.address)) + (await claimable(TREASURY));
-  assert.equal(held, owed, "escrow holds exactly what is owed");
+  const collateral = V2 ? await read<bigint>("totalRefereeBond") : 0n;
+  const owed = (await claimable(wallets.alice.address)) + (await claimable(wallets.bob.address)) + (await claimable(TREASURY)) + collateral;
+  assert.equal(held, owed, "escrow holds exactly what is owed (plus the referee's collateral on v2)");
   ok(`escrow balance ${held} equals all unclaimed credits`);
   log("ALL JINX SCENARIOS PASSED");
 } catch (e) {

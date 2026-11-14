@@ -27,7 +27,7 @@ import {
   initialBoard,
   jinxChain,
   jinxDomain,
-  jinxEscrowAbi,
+  jinxEscrowV2Abi,
   jinxGenesis,
   NO_PICK,
   potEscrowAbi,
@@ -51,7 +51,7 @@ import {
   type StateMatch,
   type StateResponse,
 } from "@playpot/game";
-import { cellName, clockRemaining, describeTurn, replayJinx, RING } from "./jinxUi.ts";
+import { cellName, clockRemaining, describeTiers, describeTurn, money, pct, rakeBpsFor, replayJinx, RING, type Limits } from "./jinxUi.ts";
 import { Practice } from "./practice.ts";
 
 // ------------------------------------------------------------------------------- types & state
@@ -62,7 +62,7 @@ interface Config {
   token: Address;
   referee: Address;
   rpcUrl: string;
-  jinx?: { escrow: Address; token: Address };
+  jinx?: { escrow: Address; token: Address; limits?: Limits };
 }
 interface Offer {
   bestOf?: number;
@@ -137,7 +137,7 @@ const S = {
 /** The escrow, token and ABI of the game the player is looking at. */
 const G = () =>
   S.game === "jinx" && S.cfg?.jinx
-    ? { escrow: S.cfg.jinx.escrow, token: S.cfg.jinx.token, abi: jinxEscrowAbi as unknown }
+    ? { escrow: S.cfg.jinx.escrow, token: S.cfg.jinx.token, abi: jinxEscrowV2Abi as unknown }
     : { escrow: S.cfg!.escrow, token: S.cfg!.token, abi: potEscrowAbi as unknown };
 
 const params = new URLSearchParams(location.search);
@@ -366,6 +366,9 @@ const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
   create: () =>
     run("Create offer", async () => {
       const stake = parseUnits(S.stakeInput || "0", 6);
+      const lim = S.game === "jinx" ? S.cfg?.jinx?.limits : undefined;
+      if (lim && stake < BigInt(lim.minStake)) throw new Error(`The minimum stake is ${money(BigInt(lim.minStake))} tPUSD each.`);
+      if (lim && stake > BigInt(lim.maxStake)) throw new Error(`The maximum stake is ${money(BigInt(lim.maxStake))} tPUSD each for now.`);
       if (S.allowance < stake) await write(G().token, testTokenAbi, "approve", [G().escrow, 2n ** 256n - 1n]);
       const pk = generatePrivateKey();
       const expiry = S.now + 86_400n;
@@ -425,7 +428,10 @@ app.addEventListener("click", (e) => {
 });
 app.addEventListener("input", (e) => {
   const t = e.target as HTMLInputElement;
-  if (t.id === "stake") S.stakeInput = t.value;
+  if (t.id === "stake") {
+    S.stakeInput = t.value;
+    render(); // the rake preview follows what is typed; render() keeps the cursor where it was
+  }
   if (t.id === "bestof") S.bestOfInput = t.value === "5" ? 5 : 3;
   if (t.id === "pbestof") S.practiceBestOf = t.value === "5" ? 5 : 3;
   if (t.id === "jstep" && S.jview) {
@@ -1094,6 +1100,26 @@ function renderPractice(p: Practice): string {
   </section>`;
 }
 
+/** What a JINX stake means: the allowed range, the rake for the pot typed in, and any referee collateral problem. */
+function limitsHint(): string {
+  const lim = S.cfg?.jinx?.limits;
+  if (!lim) return "";
+  let stake = 0n;
+  try {
+    stake = parseUnits(S.stakeInput || "0", 6);
+  } catch {
+    /* not a number yet */
+  }
+  const pot = stake * 2n;
+  const bps = rakeBpsFor(lim.tiers, pot);
+  const fee = (pot * BigInt(bps)) / 10_000n;
+  const bad = stake > 0n && (stake < BigInt(lim.minStake) || stake > BigInt(lim.maxStake));
+  const warn = BigInt(lim.refereeBond) < BigInt(lim.refereeBondFloor) ? '<div class="bad">The referee has not posted its collateral yet, so new matches cannot start.</div>' : "";
+  return `<div class="dim" id="limits">Each player stakes ${money(BigInt(lim.minStake))} to ${money(BigInt(lim.maxStake))} tPUSD${bad ? ' <span class="bad">(outside that range)</span>' : ""}.
+    ${stake > 0n ? `Pot ${money(pot)}, rake ${pct(bps)} (${money(fee)}), winner receives ${money(pot - fee)}.` : ""}
+    <span title="The rate depends on the size of the pot">Rake: ${esc(describeTiers(lim.tiers))}.</span></div>${warn}`;
+}
+
 /** A short checklist for a first-time player, shown until the wallet has gas and test tokens. */
 function getStarted(cfg: Config): string {
   const hasWallet = !!S.addr;
@@ -1173,6 +1199,7 @@ function render() {
     ${jinxGame ? `<select id="bestof"><option value="3" ${S.bestOfInput === 3 ? "selected" : ""}>Best of 3</option><option value="5" ${S.bestOfInput === 5 ? "selected" : ""}>Best of 5</option></select>` : ""}
     <button class="primary" data-act="create" ${S.busy || !S.addr ? "disabled" : ""}>Create offer</button>
     <span class="dim">locks your stake until someone challenges or you cancel</span></div>
+    ${jinxGame ? limitsHint() : ""}
     <table id="offers"><tr><th>#</th><th>Creator</th><th>Stake</th>${jinxGame ? "<th>Format</th>" : ""}<th></th></tr>${
       S.offers.length === 0
         ? '<tr><td colspan="5" class="dim">no open offers</td></tr>'

@@ -201,6 +201,42 @@ When you deploy a release, publish its site hash next to the git commit (for exa
 
 Source is verified on Basescan. Parameters: 3% rake (immutable cap 10%), 30 minute challenge window, 1 hour match time plus 10 minutes grace before `abort`, dispute bond 5 test tokens. Also in `deployments/base-sepolia.json`. Test tokens only, no real value.
 
+## JINX v2 contracts (`JinxEscrowV2`)
+
+A new contract, deployed next to v1. v1's source is untouched, so the verified deployment keeps matching. The match, signing, receipt and dispute logic is identical (every one of v1's 28 tests also runs against v2); v2 adds the money rules the beta needs:
+
+| | v2 |
+|---|---|
+| Minimum stake | 10 tokens each, so a 20 token pot (`MIN_STAKE`) |
+| Maximum stake | Starts at 100 each. The owner can move it up or down (`setMaxStake`), never above a hard cap fixed at deployment (1,000 by default). It applies to offers created and challenged after the change. Pausing and the cap can never block funds being released. |
+| Rake | By pot size, as cliffs: **8.5%** from the minimum pot, **7%** from 500, **5%** from 1,000, **3%** from 10,000. The table is fixed at deployment, can only fall as pots grow, and can never exceed the 10% ceiling. The rate is locked in when a match starts. (A pot of 499 pays 8.5% and a pot of 500 pays 7%: the step is a cliff by design.) |
+| Referee collateral | The referee must post collateral (`depositRefereeBond`) before it can be assigned any match: at least the floor (500 by default) and at least the stake of the match. If the referee signs a "you missed" call and also signs a receipt for the same pick, and the player proves it with `voidMiss`, **one stake of the collateral is paid to the player it wronged**. Collateral can be withdrawn only after announcing the exit (no new matches) and once none of its matches is still open. |
+
+What the collateral is and is not: it makes the one provable referee fraud (a miss contradicted by its own receipt) cost the referee money, paid to the victim. It is not insurance against everything. A pick the referee silently drops is still unprovable, and the referee's clock is still trusted (see "What is still trusted" above).
+
+Deploy it on Base Sepolia (Windows PowerShell; use your own deployer key and addresses):
+
+```powershell
+cd contracts
+$env:TOKEN = "0x43aD88593cFE37567Aa6385812260446168E2eb7"      # the existing test token
+$env:REFEREE = "0xC3Abd6eD23D0b57dCBB0fA0C6F4f45eD745d2DB5"
+$env:TREASURY = "0x25f2c0C83a53B95De574836671bd9aBB3df77c37"
+forge script script/DeployJinxV2.s.sol --rpc-url https://sepolia.base.org --private-key 0x<deployer key> --broadcast
+```
+
+It prints `JINX_ESCROW_V2`. **Before anyone can play, the referee wallet must post its collateral**, or no match can start (the server prints a warning and the lobby shows one). With the referee's own key, and `$J` set to the new address:
+
+```powershell
+$T = $env:TOKEN; $J = "0x<JINX_ESCROW_V2>"; $K = "0x<referee key>"; $R = "https://sepolia.base.org"
+cast send $T "mint(address,uint256)" $env:REFEREE 1000000000 --rpc-url $R --private-key $K
+cast send $T "approve(address,uint256)" $J 1000000000 --rpc-url $R --private-key $K
+cast send $J "depositRefereeBond(uint256)" 1000000000 --rpc-url $R --private-key $K
+```
+
+Then run the game with `$env:JINX_ESCROW = $J` (the server reads the limits and rake table from the chain and the lobby shows them). Verify the source on BaseScan with `forge verify-contract <address> src/JinxEscrowV2.sol:JinxEscrowV2 --chain base-sepolia --guess-constructor-args --etherscan-api-key <key>`. Tunables (all optional, see the header of `script/DeployJinxV2.s.sol`): `MIN_STAKE`, `MAX_STAKE`, `HARD_MAX_STAKE`, `REFEREE_BOND_FLOOR`, `RAKE_FLOORS`, `RAKE_BPS`, `CHALLENGE_WINDOW`, `MATCH_DURATION`, `ABORT_GRACE`, `DISPUTE_BOND`.
+
+Tests: `forge test --match-contract JinxEscrowV2Test` (51 tests, including fuzzing of the rake rules and of pot accounting), and `npm run e2e:jinx:v2` plays every scenario, including the false-miss slash, with real signatures from the TypeScript client. Tic-tac-toe stays on its v0 contract; new games (chess) will start from the v2 money rules.
+
 ## Known limits of v0
 
 - **Mock referee.** One plain key signs as the referee. Phase 2 moves it into an attested enclave; until then, the referee can only affect settlement by colluding with a player, and the dispute path above overturns that.

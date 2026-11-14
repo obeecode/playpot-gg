@@ -133,3 +133,36 @@ export function clockRemaining(openedMs: number, skewMs: number, localNowMs: num
 }
 
 export const RING = 169.65; // circumference of the clock ring (r = 27)
+
+/** Stake limits and rake tiers the server reads from a v2 JINX escrow (token units: 6 decimals). */
+export interface Limits {
+  minStake: string;
+  maxStake: string;
+  tiers: Array<{ floor: string; bps: number }>;
+  refereeBond: string;
+  refereeBondFloor: string;
+}
+
+/** The rake, in basis points, for a pot: the highest tier whose floor the pot reaches. */
+export function rakeBpsFor(tiers: Limits["tiers"], pot: bigint): number {
+  let bps = tiers[0]?.bps ?? 0;
+  for (const t of tiers) if (pot >= BigInt(t.floor)) bps = t.bps;
+  return bps;
+}
+
+const pct = (bps: number) => `${(bps / 100).toFixed(bps % 100 === 0 ? 0 : 1)}%`;
+const money = (units: bigint) => (Number(units) / 1e6).toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+/** "8.5% on pots under 500, 7% from 500, 5% from 1,000, 3% from 10,000" */
+export function describeTiers(tiers: Limits["tiers"]): string {
+  return tiers
+    .map((t, i) => {
+      const next = tiers[i + 1];
+      if (i === 0 && next) return `${pct(t.bps)} on pots under ${money(BigInt(next.floor))}`;
+      if (i === 0) return `${pct(t.bps)} on every pot`;
+      return `${pct(t.bps)} from ${money(BigInt(t.floor))}`;
+    })
+    .join(", ");
+}
+
+export { money, pct };

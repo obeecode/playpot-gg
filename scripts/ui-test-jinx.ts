@@ -9,7 +9,7 @@ import { chromium, type Page } from "playwright-core";
 import { createPublicClient, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { startServer } from "../packages/server/src/main.ts";
-import { deployContracts, deployJinx } from "./lib.ts";
+import { deployContracts, deployJinxV2 } from "./lib.ts";
 
 const ANVIL_PORT = 18548;
 const RPC = `http://127.0.0.1:${ANVIL_PORT}`;
@@ -39,7 +39,7 @@ try {
   const referee = privateKeyToAccount(REFEREE).address;
   const treasury = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as const;
   const { token, escrow } = await deployContracts({ rpc: RPC, deployerPk: DEPLOYER, referee, treasury });
-  const jinxEscrow = await deployJinx({ rpc: RPC, deployerPk: DEPLOYER, referee, treasury, token });
+  const jinxEscrow = await deployJinxV2({ rpc: RPC, deployerPk: DEPLOYER, refereePk: REFEREE, treasury, token }); // the beta defaults: $10 minimum stake, tiered rake
   server = await startServer({
     rpcUrl: RPC,
     escrow,
@@ -84,6 +84,18 @@ try {
     console.log(`${n}: funded, on the JINX tab`);
   }
 
+  // v2 limits and the rake preview, before any money moves.
+  await waitText(alice, "#limits", /10 to 100 tPUSD/);
+  await waitText(alice, "#limits", /rake 8\.5% \(1\.7\), winner receives 18\.3/);
+  await alice.fill("#stake", "5");
+  await waitText(alice, "#limits", /outside that range/);
+  await alice.click('[data-act="create"]');
+  await waitText(alice, "#msg", /minimum stake is 10/);
+  console.log("alice: a stake under the minimum is refused with a clear message");
+  await alice.fill("#stake", "500");
+  await alice.click('[data-act="create"]');
+  await waitText(alice, "#msg", /maximum stake is 100/);
+  await alice.fill("#stake", "600");
   await alice.fill("#stake", "10");
   await alice.selectOption("#bestof", "3");
   await alice.click('[data-act="create"]');
@@ -130,11 +142,11 @@ try {
   if (score?.trim() !== "2") throw new Error(`expected alice to have 2 wins, got ${score}`);
   await alice.screenshot({ path: join(SHOTS, "jinx-3-won.png") });
 
-  await waitText(alice, "#claimable", /^19\.4/);
+  await waitText(alice, "#claimable", /^18\.3/);
   await alice.click('[data-act="claim"]');
   await msgDone(alice, "Claim");
-  await waitText(alice, "#tokens", /^1009\.4/);
-  console.log("alice claimed 19.4 tPUSD");
+  await waitText(alice, "#tokens", /^1008\.3/);
+  console.log("alice claimed 18.3 tPUSD (a $20 pot at the 8.5% tier)");
   console.log(`\nJINX UI TEST PASSED (screenshots in ${SHOTS})`);
 } catch (e) {
   console.error("\nJINX UI TEST FAILED:", e);

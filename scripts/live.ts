@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { createPublicClient, http, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { startServer } from "../packages/server/src/main.ts";
-import { deployContracts, deployJinx } from "./lib.ts";
+import { deployContracts, deployJinxV2 } from "./lib.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const existing = Boolean(process.env.ESCROW && process.env.REFEREE_PK);
@@ -83,10 +83,10 @@ if (existing) {
     treasury,
     challengeWindow: Number(process.env.CHALLENGE_WINDOW ?? 1800),
   });
-  const jinxEscrow = await deployJinx({
+  const jinxEscrow = await deployJinxV2({
     rpc: RPC,
     deployerPk,
-    referee: referee.address,
+    refereePk,
     treasury,
     token,
     challengeWindow: Number(process.env.CHALLENGE_WINDOW ?? 1800),

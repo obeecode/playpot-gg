@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { join, normalize, resolve, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { privateKeyToAccount } from "viem/accounts";
-import { eip712Domain, jinxDomain, jinxEscrowAbi, type ClientMsg, type MatchLog, type ServerMsg } from "@playpot/game";
+import { eip712Domain, jinxDomain, jinxEscrowV2Abi, type ClientMsg, type MatchLog, type ServerMsg } from "@playpot/game";
 import type { Address, Hex } from "viem";
 import { isAddress } from "viem";
 import { Chain } from "./chain.ts";
@@ -43,11 +43,42 @@ export async function startServer(cfg: ServerConfig) {
   let jinxSnapshots: Snapshots | undefined;
   let jinxToken: Address | undefined;
   if (cfg.jinxEscrow) {
-    jinxChain = new Chain(cfg.rpcUrl, cfg.jinxEscrow, relayer, jinxEscrowAbi);
+    // v2 is a superset of v1's functions, so one ABI serves both deployments.
+    jinxChain = new Chain(cfg.rpcUrl, cfg.jinxEscrow, relayer, jinxEscrowV2Abi);
     await jinxChain.init();
     jinxToken = await jinxChain.token();
     jinxSnapshots = new Snapshots(jinxChain, jinxToken);
   }
+
+  /** Stake limits, rake tiers and the referee's collateral, when the JINX escrow is v2 (a v1 escrow has none). */
+  let limitsCache: { at: number; data: unknown } | undefined;
+  async function jinxLimits() {
+    if (!jinxChain) return undefined;
+    if (limitsCache && Date.now() - limitsCache.at < 30_000) return limitsCache.data;
+    const jc = jinxChain;
+    const rd = (functionName: string, args: unknown[] = []) => jc.pub.readContract({ address: jc.escrow, abi: jinxEscrowV2Abi, functionName, args } as never) as Promise<never>;
+    let data: unknown;
+    try {
+      const [minStake, maxStake, tiers, bond, floor] = (await Promise.all([rd("minStake"), rd("maxStake"), rd("rakeTiers"), rd("refereeBond", [referee.address]), rd("refereeBondFloor")])) as [bigint, bigint, [bigint[], number[]], bigint, bigint];
+      data = {
+        minStake: String(minStake),
+        maxStake: String(maxStake),
+        tiers: tiers[0].map((f, i) => ({ floor: String(f), bps: Number(tiers[1][i]) })),
+        refereeBond: String(bond),
+        refereeBondFloor: String(floor),
+      };
+    } catch {
+      data = undefined;
+    }
+    limitsCache = { at: Date.now(), data };
+    return data;
+  }
+  void jinxLimits().then((l) => {
+    const lim = l as { refereeBond: string; refereeBondFloor: string } | undefined;
+    if (lim && BigInt(lim.refereeBond) < BigInt(lim.refereeBondFloor)) {
+      console.warn(`WARNING: the referee ${referee.address} has posted ${lim.refereeBond} collateral, below the ${lim.refereeBondFloor} floor. No JINX match can start until it calls depositRefereeBond.`);
+    }
+  });
 
   const rooms = new Map<string, Room>();
   const subs = new Map<string, Set<WebSocket>>();
@@ -234,7 +265,7 @@ export async function startServer(cfg: ServerConfig) {
           token: tokenAddr,
           referee: referee.address,
           rpcUrl,
-          jinx: jinxChain ? { escrow: jinxChain.escrow, token: jinxToken } : undefined,
+          jinx: jinxChain ? { escrow: jinxChain.escrow, token: jinxToken, limits: await jinxLimits() } : undefined,
         });
       }
       if (url.pathname === "/rpc" && cfg.proxyRpc && req.method === "POST") {

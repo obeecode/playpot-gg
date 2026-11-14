@@ -58,3 +58,26 @@ test("destroy stops everything", async () => {
   await sleep(30);
   assert.equal(changes, before);
 });
+
+import { describeTiers, rakeBpsFor, type Limits } from "./jinxUi.ts";
+
+const TIERS: Limits["tiers"] = [
+  { floor: "0", bps: 850 },
+  { floor: "500000000", bps: 700 },
+  { floor: "1000000000", bps: 500 },
+  { floor: "10000000000", bps: 300 },
+];
+
+test("the rake preview follows the contract's cliffs", () => {
+  assert.equal(rakeBpsFor(TIERS, 20_000_000n), 850);
+  assert.equal(rakeBpsFor(TIERS, 499_999_999n), 850);
+  assert.equal(rakeBpsFor(TIERS, 500_000_000n), 700);
+  assert.equal(rakeBpsFor(TIERS, 1_000_000_000n), 500);
+  assert.equal(rakeBpsFor(TIERS, 10_000_000_000n), 300);
+  assert.equal(rakeBpsFor(TIERS, 10n ** 18n), 300);
+});
+
+test("the tier table reads as plain words", () => {
+  assert.equal(describeTiers(TIERS), "8.5% on pots under 500, 7% from 500, 5% from 1,000, 3% from 10,000");
+  assert.equal(describeTiers([{ floor: "0", bps: 300 }]), "3% on every pot");
+});
