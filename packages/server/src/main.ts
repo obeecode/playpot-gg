@@ -250,10 +250,13 @@ export async function startServer(cfg: ServerConfig) {
         const matchId = url.searchParams.get("match");
         const snap = url.searchParams.get("game") === "jinx" ? jinxSnapshots : snapshots;
         if (!snap) return json(404, { error: "game not enabled" });
+        // Clients ask for balances only when something changed (acct=0 skips them); fresh=1 skips the short cache.
+        const wantAccount = url.searchParams.get("acct") !== "0";
+        const fresh = url.searchParams.get("fresh") === "1";
         const [shared, account, view] = await Promise.all([
-          snap.getShared(),
-          addr && isAddress(addr) ? snap.getAccount(addr) : undefined,
-          matchId && /^\d+$/.test(matchId) ? snap.getMatch(BigInt(matchId)) : undefined,
+          snap.getShared(fresh),
+          wantAccount && addr && isAddress(addr) ? snap.getAccount(addr, fresh) : undefined,
+          matchId && /^\d+$/.test(matchId) ? snap.getMatch(BigInt(matchId), fresh) : undefined,
         ]);
         res.writeHead(200, { "content-type": "application/json" });
         return void res.end(JSON.stringify({ ...shared, account, view }, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));

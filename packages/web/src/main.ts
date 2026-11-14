@@ -121,6 +121,8 @@ const S = {
   view: null as MatchView | null,
   msg: "",
   busy: false,
+  needAcct: true, // balances are fetched only when something changed
+  lastAcct: 0,
   build: "",
   stakeInput: "10",
   game: (localStorage.getItem("playpot:game") === "jinx" ? "jinx" : "ttt") as "ttt" | "jinx",
@@ -177,18 +179,37 @@ async function write(address: Address, abi: unknown, functionName: string, args:
 }
 const escrowWrite = (fn: string, args: unknown[]) => write(G().escrow, G().abi, fn, args);
 
+const acctSig = () => `${S.eth}:${S.tokens}:${S.allowance}:${S.claimable}`;
+
+/**
+ * After something that changed our balances (our own transaction, a payout), read them again until they actually
+ * differ. The server reuses a read younger than a second, so the first look can be the old numbers.
+ */
+async function refreshAfterChange() {
+  const before = acctSig();
+  for (let i = 0; i < 4; i++) {
+    S.needAcct = true;
+    await refresh();
+    if (acctSig() !== before) return;
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+}
+
 async function run(label: string, fn: () => Promise<void>) {
   S.busy = true;
   S.msg = `${label}…`;
   render();
+  let ok = false;
   try {
     await fn();
+    ok = true;
     S.msg = `${label}: done`;
   } catch (e) {
     S.msg = `${label} failed: ${((e as { shortMessage?: string }).shortMessage ?? (e as Error).message).slice(0, 240)}`;
   }
   S.busy = false;
-  await refresh();
+  if (ok) await refreshAfterChange();
+  else await refresh();
 }
 
 const skKey = (id: bigint) => `playpot:sk:${S.cfg!.chainId}:${G().escrow}:${id}:${S.addr}`.toLowerCase();
@@ -226,7 +247,16 @@ async function init() {
   }
   render();
   await refresh();
-  setInterval(() => void refresh(), 5000);
+  // The lobby snapshot is cached on the server, so polling it is cheap. Hidden tabs do not poll at all.
+  setInterval(() => {
+    if (!document.hidden) void refresh();
+  }, 5000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      S.needAcct = true;
+      void refresh();
+    }
+  });
 }
 
 async function connect(burner: boolean) {
@@ -241,6 +271,7 @@ async function connect(burner: boolean) {
     }
     const account = privateKeyToAccount(pk);
     S.burner = true;
+    S.needAcct = true;
     S.acct = account;
     S.addr = account.address;
     S.wallet = createWalletClient({ account, chain: S.chain, transport: transport(S.cfg.rpcUrl) });
@@ -260,6 +291,7 @@ async function connect(burner: boolean) {
     } else throw e;
   }
   S.burner = false;
+  S.needAcct = true;
   S.acct = addr;
   S.addr = addr;
   S.wallet = createWalletClient({ account: addr, chain: S.chain, transport: custom(eth) });
@@ -270,6 +302,9 @@ async function refresh() {
   try {
     const q = new URLSearchParams();
     if (S.addr) q.set("addr", S.addr);
+    const wantAcct = !!S.addr && (S.needAcct || Date.now() - S.lastAcct > 60_000);
+    q.set("acct", wantAcct ? "1" : "0");
+    if (S.needAcct) q.set("fresh", "1");
     if (S.game === "jinx") q.set("game", "jinx");
     const watching = S.view?.id ?? S.jview?.id;
     if (watching !== undefined) q.set("match", watching.toString());
@@ -279,6 +314,8 @@ async function refresh() {
     S.now = BigInt(st.now);
     S.bond = BigInt(st.bond);
     if (st.account) {
+      S.needAcct = false;
+      S.lastAcct = Date.now();
       S.eth = BigInt(st.account.eth);
       S.tokens = BigInt(st.account.tokens);
       S.allowance = BigInt(st.account.allowance);
@@ -396,6 +433,7 @@ const activeId = (): bigint => (S.jview?.id ?? S.view?.id)!;
 
 function switchGame(g: "ttt" | "jinx") {
   if (S.game === g || (g === "jinx" && !S.cfg?.jinx)) return;
+  S.needAcct = true;
   closeMatch();
   S.game = g;
   localStorage.setItem("playpot:game", g);
@@ -481,7 +519,7 @@ async function onServerMsg(v: MatchView, msg: ServerMsg) {
     await signFinal(v);
   } else if (msg.type === "settled") {
     v.settled = `${msg.mode} settlement, tx ${short(msg.tx)}`;
-    void refresh();
+    void refreshAfterChange(); // the payout changed our claimable balance
   } else if (msg.type === "error") {
     v.error = msg.message;
   }
@@ -644,7 +682,7 @@ async function onJinxMsg(v: JinxView, msg: ServerMsg) {
     v.error = msg.message;
   } else if (msg.type === "jinx-settled") {
     v.settled = `${msg.mode} settlement, tx ${short(msg.tx)}`;
-    void refresh();
+    void refreshAfterChange(); // the payout changed our claimable balance
   } else if (msg.type === "jinx-state") {
     v.skewMs = msg.nowMs - Date.now();
     const { turns, ...base } = msg.log;

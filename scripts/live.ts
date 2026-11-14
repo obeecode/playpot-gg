@@ -112,7 +112,14 @@ if (process.env.NO_TUNNEL === "1") {
 function startTunnel(port: number) {
 // TCP (http2) is more reliable than the default QUIC/UDP on many home networks, VPNs and antivirus setups.
 // Set TUNNEL_PROTOCOL=quic to use QUIC instead.
-const tunnelArgs = ["tunnel", "--url", `http://localhost:${port}`, "--no-autoupdate", "--protocol", process.env.TUNNEL_PROTOCOL ?? "http2"];
+// With TUNNEL_NAME (and TUNNEL_HOST) it runs a named Cloudflare tunnel on your own domain, so the link never changes.
+const proto = process.env.TUNNEL_PROTOCOL ?? "http2";
+const named = process.env.TUNNEL_NAME;
+const namedHost = process.env.TUNNEL_HOST;
+if (named && !namedHost) console.log("TUNNEL_NAME is set but TUNNEL_HOST is not (for example app.playpot.gg), so the link cannot be announced.");
+const tunnelArgs = named
+  ? ["tunnel", "--no-autoupdate", "--protocol", proto, "run", "--url", `http://localhost:${port}`, named]
+  : ["tunnel", "--url", `http://localhost:${port}`, "--no-autoupdate", "--protocol", proto];
 const tunnel = spawn("cloudflared", tunnelArgs, { stdio: ["ignore", "pipe", "pipe"] });
 children.push(tunnel);
 tunnel.on("error", () => {
@@ -127,15 +134,15 @@ const howTo = existing
   ? 'Open it yourself too. Use MetaMask (or "Use burner wallet"). Each player needs a little Base Sepolia ETH for gas:\ncopy the address shown in the Wallet box and request it from a Base Sepolia faucet. Then click "Mint 1000 test tokens".\nKeep this window open while you play. Ctrl+C to stop. Games and balances live on Base Sepolia and survive restarts.'
   : 'Open it yourself too. Each of you gets a burner wallet; use "Dev: 10 ETH" then "Mint 1000 test tokens".\nKeep this window open while you play. Ctrl+C to stop (the chain resets).';
 let announced = false;
-let url = "";
+let url = named && namedHost ? `https://${namedHost}` : "";
 const onData = (buf: Buffer) => {
   const text = buf.toString();
-  const m = text.match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/);
+  const m = named ? null : text.match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/);
   if (m && !url) url = m[0];
   // The URL is printed before the tunnel is up. Only announce it once cloudflared has really connected.
   if (url && !announced && /Registered tunnel connection/.test(text)) {
     announced = true;
-    console.log(`\n=======================================================\n  Share this link with your friend:\n  ${url}\n=======================================================\n${howTo}`);
+    console.log(`\n=======================================================\n  ${named ? "Your permanent link:" : "Share this link with your friend:"}\n  ${url}\n=======================================================\n${howTo}`);
   }
 };
 const showProblems = (buf: Buffer) => {

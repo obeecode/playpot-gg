@@ -87,6 +87,26 @@ npm run live
 
 Games and balances live on Base Sepolia, so they survive restarts; the link changes each run. Each player needs a little Base Sepolia ETH for gas (copy the address from the Wallet box into a faucet) and then clicks **Mint 1000 test tokens**. MetaMask works here.
 
+### A permanent address on your own domain (free Cloudflare named tunnel)
+
+The quick tunnel's link changes every run. To serve the same game at `https://app.playpot.gg` (or any hostname) with no server to rent:
+
+1. **Put the domain's DNS on Cloudflare (free plan).** Your registrar (for example Namecheap) can stay as it is. In Cloudflare choose *Add a site*, enter the domain, pick the Free plan, and copy the two nameservers it shows. In Namecheap: Domain List, Manage, Nameservers, Custom DNS, paste both, save. Cloudflare marks the site *Active* once it has settled (minutes to hours).
+2. **Create the tunnel, once:**
+   ```powershell
+   cloudflared tunnel login                       # a browser opens: pick your domain
+   cloudflared tunnel create playpot
+   cloudflared tunnel route dns playpot app.playpot.gg
+   ```
+3. **Run the game with the tunnel name and host** (plus the `ESCROW`, `JINX_ESCROW` and `REFEREE_PK` settings above):
+   ```powershell
+   $env:TUNNEL_NAME = "playpot"
+   $env:TUNNEL_HOST = "app.playpot.gg"
+   npm run live
+   ```
+
+The link is announced only after the tunnel has really connected. Your computer has to stay on; to move the referee to a rented server later, run the same tunnel (or a normal DNS record) from there. Players' balances are read through one batched call that clients only request after something changes, so the RPC bill follows games played rather than tabs left open.
+
 ## Deploy to Base Sepolia (play with a friend)
 
 You need a normal browser and internet access for the faucet steps.
