@@ -1,8 +1,8 @@
-import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type WebSocket from "ws";
 import type { LocalAccount } from "viem";
-import type { ClientMsg, JinxDomain, JinxMatchLog, ServerMsg } from "@playpot/game";
+import { verifyJinxLog, type ClientMsg, type JinxDomain, type JinxMatchLog, type ServerMsg } from "@playpot/game";
 import type { Chain } from "./chain.ts";
 import { JinxRoom, type JinxEvent, type JinxRoomOptions } from "./jinxRoom.ts";
 
@@ -86,8 +86,33 @@ export class JinxHost {
       this.o.domain,
       this.o.room,
     );
+    const entry: Entry = { room, sockets: new Map(), started: false, settled: m.status >= 2, queue: Promise.resolve() };
+    await this.restoreFromDisk(entry);
     // A match that already left the Active state (settled, disputed) takes no more play.
-    return { room, sockets: new Map(), started: false, settled: m.status >= 2, queue: Promise.resolve() };
+    if (room.ended && !entry.settled) entry.timer = setTimeout(() => void this.settle(entry), this.o.resultWaitMs);
+    return entry;
+  }
+
+  /** After a restart, carry on from the last saved turn instead of starting the match over. */
+  private async restoreFromDisk(e: Entry) {
+    const id = e.room.info.matchId.toString();
+    const path = logFile(this.o, id);
+    if (!existsSync(path)) return;
+    try {
+      const saved = JSON.parse(readFileSync(path, "utf8")) as JinxMatchLog;
+      const check = await verifyJinxLog(saved, new Set(), { allowUndecided: true });
+      if (!check.ok) throw new Error(check.errors.join("; "));
+      e.room.restore(saved);
+      console.log(`jinx match ${id}: restored ${saved.turns.length} turns${e.room.ended ? " (finished, settlement pending)" : ""}`);
+    } catch (err) {
+      // Keep the unreadable file for inspection and start the room clean.
+      console.error(`jinx match ${id}: saved log not usable (${(err as Error).message}); keeping it as .bad`);
+      try {
+        renameSync(path, `${path}.bad`);
+      } catch {
+        /* nothing more to do */
+      }
+    }
   }
 
   private persist(e: Entry) {

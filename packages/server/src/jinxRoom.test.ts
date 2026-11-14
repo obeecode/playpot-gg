@@ -247,3 +247,44 @@ test("a reconnecting player can see whether they already committed and the recei
   assert.ok(snap.receipt);
   assert.equal(h.room.snapshot(2).opponentCommitted, true);
 });
+
+test("a room restored from its saved log carries on exactly where it stopped", async () => {
+  // Play the first game and the start of the second, then "restart" the server from the saved log.
+  const before = new Harness();
+  for (const [a, b] of [[0, 24], [1, 20], [2, 14], [10, 5]] as const) await before.play(a, b);
+  const saved = JSON.parse(JSON.stringify(before.room.log)) as typeof before.room.log;
+  assert.ok(saved.turns.length === 4 && before.room.result === 0);
+  assert.ok((await verifyJinxLog(saved)).errors.length > 0, "normally an undecided log is not a valid final log");
+  assert.deepEqual((await verifyJinxLog(saved, new Set(), { allowUndecided: true })).errors, [], "but a referee can resume from it");
+
+  const after = new Harness();
+  after.room = makeRoom();
+  after.room.restore(saved);
+  assert.equal(after.room.turn, 4);
+  assert.equal(after.room.phase, "gap");
+  after.room.start(after.now);
+  // The same two players keep playing on the restored room, and the whole log (old turns and new) still verifies.
+  await after.play(3, 22);
+  await after.play(4, 23);
+  assert.equal(after.room.log.turns.length, 6);
+  assert.deepEqual((await verifyJinxLog(after.room.log, new Set(), { allowUndecided: true })).errors, []);
+});
+
+test("restoring a finished match keeps its result, hash and signatures for settlement", async () => {
+  const h = new Harness();
+  const wins = [0, 24, 1, 20, 2, 14, 0, 24, 1, 20, 2, 14];
+  for (let i = 0; i < wins.length; i += 2) await h.play(wins[i], wins[i + 1]);
+  assert.equal(h.room.phase, "ended");
+  const saved = JSON.parse(JSON.stringify(h.room.log)) as typeof h.room.log;
+  const again = makeRoom();
+  again.restore(saved);
+  assert.equal(again.phase, "ended");
+  assert.equal(again.result, 1);
+  assert.equal(again.finalHash, saved.finalHash);
+  assert.equal(again.refSig, saved.refSig);
+});
+
+test("a log for another match cannot be restored into a room", () => {
+  const room = makeRoom();
+  assert.throws(() => room.restore({ ...makeRoom().log, matchId: "99" }), /cannot restore/);
+});

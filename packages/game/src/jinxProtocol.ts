@@ -204,7 +204,11 @@ async function readSide(
 
 /** Re-derives a match from its log: signatures, receipts, hash chain, rules and result. Pure and deterministic.
  *  `voided` is the set of turn*2+side-1 slots whose no-commitment miss a receipt has cancelled on-chain. */
-export async function verifyJinxLog(log: JinxMatchLog, voided: ReadonlySet<number> = new Set()): Promise<JinxVerification> {
+export async function verifyJinxLog(
+  log: JinxMatchLog,
+  voided: ReadonlySet<number> = new Set(),
+  opts: { allowUndecided?: boolean } = {}, // a referee resuming a saved match checks a log that has no result yet
+): Promise<JinxVerification> {
   const errors: string[] = [];
   const matchId = BigInt(log.matchId);
   const domain = jinxDomain(log.chainId, log.escrow);
@@ -243,7 +247,7 @@ export async function verifyJinxLog(log: JinxMatchLog, voided: ReadonlySet<numbe
     }
     if (result === 0 && i + 1 === MAX_MATCH_TURNS) result = 3;
   }
-  if (errors.length === 0 && result === 0) errors.push("the log does not end in a decided match");
+  if (errors.length === 0 && result === 0 && !opts.allowUndecided) errors.push("the log does not end in a decided match");
   if (log.result !== undefined) {
     if (log.result !== result) errors.push(`claimed result ${log.result} != replayed result ${result}`);
     if (log.finalHash !== head) errors.push("finalHash does not match the chain head");

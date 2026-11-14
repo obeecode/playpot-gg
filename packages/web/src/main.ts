@@ -52,6 +52,7 @@ import {
   type StateResponse,
 } from "@playpot/game";
 import { cellName, clockRemaining, describeTurn, replayJinx, RING } from "./jinxUi.ts";
+import { Practice } from "./practice.ts";
 
 // ------------------------------------------------------------------------------- types & state
 
@@ -128,6 +129,9 @@ const S = {
   game: (localStorage.getItem("playpot:game") === "jinx" ? "jinx" : "ttt") as "ttt" | "jinx",
   bestOfInput: 3 as 3 | 5,
   jview: null as JinxView | null,
+  practice: null as Practice | null,
+  practiceBestOf: 3 as 3 | 5,
+  practiceClock: undefined as ReturnType<typeof setInterval> | undefined,
 };
 
 /** The escrow, token and ABI of the game the player is looking at. */
@@ -246,10 +250,11 @@ async function init() {
     S.msg = `Cannot reach the referee server at ${S.serverUrl}: ${(e as Error).message}`;
   }
   render();
+  if (params.has("practice")) startPractice();
   await refresh();
   // The lobby snapshot is cached on the server, so polling it is cheap. Hidden tabs do not poll at all.
   setInterval(() => {
-    if (!document.hidden) void refresh();
+    if (!document.hidden && !S.practice) void refresh();
   }, 5000);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
@@ -406,6 +411,11 @@ const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
   cell: (el) => playCell(Number(el.dataset.cell)),
   jcell: (el) => void jinxTap(Number(el.dataset.cell)),
   game: (el) => switchGame(el.dataset.game === "jinx" ? "jinx" : "ttt"),
+  practice: () => startPractice(),
+  ptap: (el) => void S.practice?.tap(Number(el.dataset.cell)),
+  pagain: () => startPractice(),
+  pleave: () => leavePractice(),
+  copyaddr: () => void navigator.clipboard?.writeText(S.addr ?? "").then(() => ((S.msg = "Address copied."), render())).catch(() => {}),
 };
 
 app.addEventListener("click", (e) => {
@@ -417,6 +427,7 @@ app.addEventListener("input", (e) => {
   const t = e.target as HTMLInputElement;
   if (t.id === "stake") S.stakeInput = t.value;
   if (t.id === "bestof") S.bestOfInput = t.value === "5" ? 5 : 3;
+  if (t.id === "pbestof") S.practiceBestOf = t.value === "5" ? 5 : 3;
   if (t.id === "jstep" && S.jview) {
     S.jview.step = Number(t.value);
     render();
@@ -462,16 +473,43 @@ async function openMatch(id: bigint) {
   };
   S.view = v;
   await refresh();
-  const ws = new WebSocket(wsUrl(S.serverUrl));
-  v.ws = ws;
-  const send = (m: ClientMsg) => ws.send(JSON.stringify(m));
-  ws.onopen = () => send({ type: "join", matchId: id.toString() });
-  ws.onmessage = (ev) => void onServerMsg(v, JSON.parse(ev.data) as ServerMsg);
-  ws.onclose = () => {
-    if (S.view === v && !v.settled) v.error = v.error || "disconnected from referee";
-    render();
+  const connectWs = (attempt: number) => {
+    const ws = new WebSocket(wsUrl(S.serverUrl));
+    v.ws = ws;
+    ws.onopen = () => ws.send(JSON.stringify({ type: "join", matchId: id.toString() } satisfies ClientMsg));
+    ws.onmessage = (ev) => {
+      if (v.error.startsWith("reconnecting")) v.error = "";
+      void onServerMsg(v, JSON.parse(ev.data) as ServerMsg);
+    };
+    ws.onclose = () => {
+      if (S.view !== v) return; // we closed it ourselves
+      if (!v.settled) {
+        v.error = "reconnecting to the referee…";
+        setTimeout(() => S.view === v && connectWs(attempt + 1), Math.min(8000, 700 * 2 ** attempt));
+      }
+      render();
+    };
   };
+  connectWs(0);
   render();
+}
+
+function startPractice() {
+  leavePractice(false);
+  closeMatch();
+  // ?pfast=1 shortens the bot's thinking and the pauses, for automated tests.
+  const timing = params.has("pfast") ? { botMinMs: 30, botMaxMs: 120, revealMs: 120, gapMs: 120 } : undefined;
+  S.practice = new Practice(S.practiceBestOf, render, Math.random, timing);
+  S.practiceClock = setInterval(updateClock, 100);
+  render();
+}
+
+function leavePractice(redraw = true) {
+  S.practice?.destroy();
+  S.practice = null;
+  clearInterval(S.practiceClock);
+  S.practiceClock = undefined;
+  if (redraw) render();
 }
 
 function closeMatch() {
@@ -598,6 +636,7 @@ interface JinxView {
   error: string;
   step: number | null;
   clockTimer: ReturnType<typeof setInterval> | undefined;
+  fxUntil: number; // the squares placed on the last turn animate until this time
 }
 
 const jKey = (kind: string, id: bigint, extra = "") =>
@@ -652,18 +691,29 @@ async function openJinxMatch(id: bigint) {
     error: "",
     step: null,
     clockTimer: undefined,
+    fxUntil: 0,
   };
   S.jview = v;
   await refresh();
-  const side = jmySide(v);
-  const ws = new WebSocket(wsUrl(S.serverUrl));
-  v.ws = ws;
-  ws.onopen = () => ws.send(JSON.stringify({ type: "jinx-join", matchId: id.toString(), side: side || undefined } satisfies ClientMsg));
-  ws.onmessage = (ev) => void onJinxMsg(v, JSON.parse(ev.data) as ServerMsg);
-  ws.onclose = () => {
-    if (S.jview === v && !v.settled) v.error = v.error || "disconnected from referee";
-    render();
+  // If the referee restarts or the connection drops, join again: it resumes the match from its saved log.
+  const connectWs = (attempt: number) => {
+    const ws = new WebSocket(wsUrl(S.serverUrl));
+    v.ws = ws;
+    ws.onopen = () => ws.send(JSON.stringify({ type: "jinx-join", matchId: id.toString(), side: jmySide(v) || undefined } satisfies ClientMsg));
+    ws.onmessage = (ev) => {
+      if (v.error.startsWith("reconnecting")) v.error = "";
+      void onJinxMsg(v, JSON.parse(ev.data) as ServerMsg);
+    };
+    ws.onclose = () => {
+      if (S.jview !== v) return; // we closed it ourselves
+      if (!v.settled) {
+        v.error = "reconnecting to the referee…";
+        setTimeout(() => S.jview === v && connectWs(attempt + 1), Math.min(8000, 700 * 2 ** attempt));
+      }
+      render();
+    };
   };
+  connectWs(0);
   v.clockTimer = setInterval(updateClock, 100);
   render();
 }
@@ -731,6 +781,7 @@ async function onJinxMsg(v: JinxView, msg: ServerMsg) {
     } else if (e.type === "turn" && e.entry) {
       v.head = jinxAdvance(v.id, v.head, e.turn!, e.entry);
       v.entries.push(e.entry);
+      v.fxUntil = Date.now() + 700;
       v.phase = "gap";
       v.iLocked = false;
       v.oppLocked = false;
@@ -789,10 +840,11 @@ async function voidFalseMisses() {
 }
 
 function updateClock() {
-  const v = S.jview;
+  const v = S.practice ?? S.jview;
   const el = document.getElementById("clock");
   if (!v || !el) return;
   const active = v.phase === "commit";
+  if (S.practice && S.practice.myPick !== null) return void setClockIdle(el);
   const rem = active ? clockRemaining(v.openedMs, v.skewMs, Date.now()) : 10;
   const n = Math.ceil(rem);
   const lvl = !active ? "idle" : n <= 3 ? "crit" : n <= 5 ? "warn" : "";
@@ -800,6 +852,12 @@ function updateClock() {
   document.getElementById("clock-prog")?.setAttribute("stroke-dashoffset", (RING * (1 - rem / 10)).toFixed(1));
   const num = document.getElementById("clock-num");
   if (num) num.textContent = active ? String(n) : "–";
+}
+
+function setClockIdle(el: HTMLElement) {
+  el.className = "clock idle";
+  const num = document.getElementById("clock-num");
+  if (num) num.textContent = "–";
 }
 
 // ------------------------------------------------------------------------------------ rendering
@@ -930,6 +988,7 @@ function renderJinxMatch(v: JinxView): string {
       else if (c === 3) cls.push("dead");
       if (v.pick && v.pick.turn === v.turn && (v.phase === "commit" || v.phase === "reveal") && v.pick.cell === i && live) cls.push("locked");
       if (live && !(v.phase === "commit" || v.phase === "reveal") && lastPicks.includes(i)) cls.push("last");
+      if (live && Date.now() < v.fxUntil && lastPicks.includes(i)) cls.push("pop");
       if (board && board.winLine.includes(i)) cls.push("win");
       const dis = !(canTap && c === 0);
       const ageAttr = death && c === 3 ? ` data-age="${age[i]}"` : "";
@@ -953,7 +1012,7 @@ function renderJinxMatch(v: JinxView): string {
       <span class="jlock ${aLocked ? "on" : ""}" id="jlock-a">locked in</span><span></span><span class="jlock ${bLocked ? "on" : ""}" id="jlock-b" style="justify-self:end">locked in</span>
     </div>
     <div class="dim" id="jmeta">Game ${gameNo} &middot; first to ${target} games &middot; drawn games ${draws}${death && !over ? ' &middot; <span class="death">death match</span>' : ""}</div>
-    <div class="jboard" id="jboard">${cellHtml}</div>
+    <div class="jboard${v.phase === "reveal" ? " revealing" : ""}" id="jboard">${cellHtml}</div>
     <div class="jstatus" id="jstatus">${esc(prompt.msg)}${prompt.sub ? `<small>${esc(prompt.sub)}</small>` : ""}</div>
     ${total > 0 ? `<div class="row"><span class="dim">Replay</span><input id="jstep" type="range" min="0" max="${total}" value="${step}" style="width:220px" /> <span class="dim">turn ${step}/${total}</span></div>` : ""}
     <div class="dim" id="verify">${v.verify ? (v.verify.ok ? '<span class="ok">log verified: signatures, receipts, hash chain and rules all check out</span>' : `<span class="bad">log does not verify: ${esc(v.verify.errors.join("; "))}</span>`) : ""}</div>
@@ -964,20 +1023,124 @@ function renderJinxMatch(v: JinxView): string {
   </section>`;
 }
 
+function renderPractice(p: Practice): string {
+  const rep = p.rep;
+  const total = rep.snaps.length;
+  const last = total > 0 ? rep.snaps[total - 1] : undefined;
+  const over = p.phase === "ended";
+  const bestOf = p.bestOf;
+  const board = last && last.outcome !== "ongoing" && (p.phase === "gap" || over) ? last : undefined;
+  const cells = board ? board.cells : rep.game.cells;
+  const age = board ? board.age : rep.game.age;
+  const death = board ? board.death : rep.game.death;
+  const wins = last ? last.wins : ([0, 0] as [number, number]);
+  const draws = last ? last.draws : 0;
+  const target = (bestOf + 1) / 2;
+  const canTap = p.phase === "commit" && p.myPick === null;
+  const lastPicks = last ? last.picks.filter((x): x is number => x !== null) : [];
+  const showLast = p.phase === "gap" || over;
+  const lastDesc = last ? describeTurn(last, 1) : undefined;
+
+  let prompt = { msg: "", sub: "" };
+  if (over) {
+    const r = p.result;
+    prompt =
+      r === 3
+        ? { msg: "Match abandoned.", sub: lastDesc?.sub ?? "" }
+        : { msg: r === 1 ? "You win the match." : "The bot wins the match.", sub: lastDesc?.sub ?? "" };
+  } else if (p.phase === "commit") {
+    prompt =
+      p.myPick !== null
+        ? { msg: "Locked in.", sub: p.botLocked ? "Both locked in. Revealing…" : "Waiting for the bot." }
+        : {
+            msg: death ? "Death match. Tap a square." : "Tap a square.",
+            sub: death ? "Jinxed squares reopen after two turns, so this game cannot end in a draw." : "You both pick at the same moment. Neither of you can see the other's pick.",
+          };
+  } else if (p.phase === "reveal") prompt = { msg: "Revealing both picks…", sub: "" };
+  else if (lastDesc) prompt = lastDesc;
+
+  const cellHtml = cells
+    .map((c, i) => {
+      const cls = ["jcell"];
+      if (c === 1) cls.push("a");
+      else if (c === 2) cls.push("b");
+      else if (c === 3) cls.push("dead");
+      if (p.myPick === i && (p.phase === "commit" || p.phase === "reveal")) cls.push("locked");
+      if (showLast && lastPicks.includes(i)) cls.push("last");
+      if (Date.now() < p.fxUntil && lastPicks.includes(i)) cls.push("pop");
+      if (board && board.winLine.includes(i)) cls.push("win");
+      const ageAttr = death && c === 3 ? ` data-age="${age[i]}"` : "";
+      return `<button class="${cls.join(" ")}" data-act="ptap" data-cell="${i}" aria-label="${cellName(i)}"${ageAttr} ${canTap && c === 0 ? "" : "disabled"}><span class="mark"></span></button>`;
+    })
+    .join("");
+
+  return `
+  <section id="match" class="practice">
+    <div class="row"><h2 style="margin:0">JINX &middot; practice vs bot</h2><button data-act="pleave" id="pleave">Leave</button></div>
+    <div class="dim">Best of ${bestOf} &middot; nothing is staked and nothing goes on-chain. Same rules as the real game.</div>
+    <div class="jscore">
+      <div class="jside a"><span class="jchip a"></span><span>You</span><span class="n" id="jscore-a">${wins[0]}</span></div>
+      <div class="clock idle" id="clock" role="timer" aria-label="Seconds left to pick">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><circle class="track" cx="32" cy="32" r="27"></circle><circle class="prog" id="clock-prog" cx="32" cy="32" r="27" transform="rotate(-90 32 32)" stroke-dasharray="${RING}" stroke-dashoffset="0"></circle></svg>
+        <span class="num" id="clock-num">10</span>
+      </div>
+      <div class="jside b"><span class="n" id="jscore-b">${wins[1]}</span><span>Bot</span><span class="jchip b"></span></div>
+      <span class="jlock ${p.myPick !== null ? "on" : ""}" id="jlock-a">locked in</span><span></span><span class="jlock ${p.botLocked ? "on" : ""}" id="jlock-b" style="justify-self:end">locked in</span>
+    </div>
+    <div class="dim" id="jmeta">Game ${over ? (last?.gameNumber ?? 1) : rep.gameNumber} &middot; first to ${target} games &middot; drawn games ${draws}${death && !over ? ' &middot; <span class="death">death match</span>' : ""}</div>
+    <div class="jboard${p.phase === "reveal" ? " revealing" : ""}" id="jboard">${cellHtml}</div>
+    <div class="jstatus" id="jstatus">${esc(prompt.msg)}${prompt.sub ? `<small>${esc(prompt.sub)}</small>` : ""}</div>
+    ${over ? `<div class="row"><button class="primary" data-act="pagain" id="pagain">Play again</button><button data-act="pleave">Back to the lobby</button></div>` : ""}
+  </section>`;
+}
+
+/** A short checklist for a first-time player, shown until the wallet has gas and test tokens. */
+function getStarted(cfg: Config): string {
+  const hasWallet = !!S.addr;
+  const hasGas = S.eth > 0n;
+  const hasTokens = S.tokens > 0n;
+  if (hasWallet && hasGas && hasTokens) return "";
+  const mark = (ok: boolean) => (ok ? '<span class="ok">&#10003;</span>' : '<span class="dim">&#9675;</span>');
+  const faucet =
+    cfg.chainId === 84532
+      ? `Get free Base Sepolia ETH from a faucet, for example <a href="https://www.alchemy.com/faucets/base-sepolia" target="_blank" rel="noopener">Alchemy</a> or <a href="https://portal.cdp.coinbase.com/products/faucet" target="_blank" rel="noopener">Coinbase</a>, and paste your address there. ${S.addr ? '<button data-act="copyaddr" id="copyaddr">Copy my address</button>' : ""}`
+      : "Your wallet needs a little ETH for gas.";
+  return `<section id="start"><h2>Get started</h2>
+    <ol class="steps">
+      <li>${mark(hasWallet)} <b>Pick a wallet.</b> Use MetaMask, or the burner wallet that lives in this browser.</li>
+      <li>${mark(hasGas)} <b>Get gas.</b> ${faucet}</li>
+      <li>${mark(hasTokens)} <b>Mint test tokens.</b> They have no value. Press &ldquo;Mint 1000 test tokens&rdquo; in the Wallet box.</li>
+      <li class="dim">Then create an offer, or challenge someone. Want to learn JINX first? Try the practice game: it needs no wallet.</li>
+    </ol></section>`;
+}
+
 function render() {
   const focus = document.activeElement as HTMLInputElement | null;
   const keep = focus && focus.id === "stake" ? { start: focus.selectionStart, end: focus.selectionEnd } : null;
   const cfg = S.cfg;
-  const jinxGame = S.game === "jinx" && !!cfg?.jinx;
+  const jinxGame = (S.game === "jinx" && !!cfg?.jinx) || !!S.practice;
   let html = `<h1>PlayPot.GG <span class="dim">${jinxGame ? "JINX" : "tic-tac-toe"} &middot; testnet only</span></h1>
     <div class="banner">Test tokens only, no real money. ${cfg ? `chain ${cfg.chainId} &middot; escrow ${short(G().escrow)} &middot; referee ${short(cfg.referee)}` : ""}</div>`;
   if (cfg?.jinx) {
     html += `<div class="row tabs"><button data-act="game" data-game="ttt" class="${jinxGame ? "" : "primary"}">Tic-tac-toe</button><button data-act="game" data-game="jinx" class="${jinxGame ? "primary" : ""}">JINX</button></div>`;
   }
-  if (S.msg) html += `<div id="msg" class="${S.msg.includes("failed") ? "bad" : "dim"}" style="margin-bottom:8px">${esc(S.msg)}</div>`;
+  if (S.msg) html += `<div id="msg" class="${S.msg.includes("failed") ? "bad" : "dim"}" style="margin-bottom:8px">${S.busy ? '<span class="spin"></span>' : ""}${esc(S.msg)}</div>`;
 
-  if (!cfg) return void (app.innerHTML = html);
+  if (S.practice) {
+    app.innerHTML = html + renderPractice(S.practice);
+    updateClock();
+    return;
+  }
 
+  if (!cfg) {
+    const loading = S.msg ? "" : '<div class="loading"><span class="spin"></span> Connecting to the referee…</div>';
+    return void (app.innerHTML = html + loading);
+  }
+
+  if (!S.jview && !S.view) {
+    html += getStarted(cfg);
+    html += `<section id="practice-card"><h2>Practice</h2><div class="row"><select id="pbestof"><option value="3" ${S.practiceBestOf === 3 ? "selected" : ""}>Best of 3</option><option value="5" ${S.practiceBestOf === 5 ? "selected" : ""}>Best of 5</option></select><button class="primary" data-act="practice" id="practice">Play JINX against the bot</button><span class="dim">no wallet, no stake</span></div></section>`;
+  }
   html += `<section><h2>Wallet</h2>`;
   if (!S.addr) {
     html += `<div class="row">${window.ethereum ? '<button class="primary" data-act="connect">Connect wallet</button>' : ""}<button data-act="burner">Use burner wallet</button></div>`;

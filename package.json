@@ -16,16 +16,18 @@
     "web": "npm run dev -w @playpot/web",
     "dev": "node scripts/dev.ts",
     "ui-test": "node scripts/ui-test.ts",
-    "test": "npm run test:contracts && npm run test:game && npm run test:verify && npm run test:server && npm run typecheck && npm run e2e && npm run e2e:jinx && npm run ui-test && npm run ui-test:jinx",
+    "test": "npm run test:contracts && npm run test:game && npm run test:verify && npm run test:server && npm run test:web && npm run typecheck && npm run e2e && npm run e2e:jinx && npm run ui-test && npm run ui-test:jinx && npm run ui-test:practice",
     "build:web": "npm run build -w @playpot/web && node scripts/hash-dist.ts packages/web/dist",
     "live": "node scripts/live.ts",
     "hash:web": "node scripts/hash-dist.ts packages/web/dist",
     "verify:site": "node scripts/verify-site.ts",
     "test:verify": "node --test scripts/verify-site.test.ts",
     "test:server": "npm test -w @playpot/server",
+    "test:web": "npm test -w @playpot/web",
     "e2e:jinx": "node scripts/e2e-jinx.ts",
     "fixtures:jinx": "node scripts/gen-jinx-fixtures.ts",
-    "ui-test:jinx": "node scripts/ui-test-jinx.ts"
+    "ui-test:jinx": "node scripts/ui-test-jinx.ts",
+    "ui-test:practice": "node scripts/ui-test-practice.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

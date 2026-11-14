@@ -131,10 +131,18 @@ class Player {
     this.head = jinxChain(this.head, turn, a.commitment, b.commitment, a.cell, b.cell);
   }
 
+  /** After a reconnect the referee sends the whole log so far: rebuild our copy and chain head from it. */
+  private resync(log: JinxMatchLog) {
+    this.entries = log.turns.slice();
+    this.head = jinxGenesis(this.matchId);
+    this.entries.forEach((e, t) => this.advanceHead(t, e));
+  }
+
   private async onMessage(msg: any) {
     if (process.env.DEBUG) console.log(`      [${this.name}] ${msg.type}${msg.event ? ":" + msg.event.type + (msg.event.turn !== undefined ? "#" + msg.event.turn : "") : ""}${msg.type === "error" ? " " + String(msg.message).slice(0, 150) : ""}`);
     try {
       if (msg.type === "error") this.errors.push(msg.message);
+      else if (msg.type === "jinx-state") this.resync(msg.log);
       else if (msg.type === "jinx-settled") this.settled = { tx: msg.tx, mode: msg.mode };
       else if (msg.type === "jinx-event") await this.onEvent(msg.event);
     } catch (e) {
@@ -226,19 +234,21 @@ try {
     await send(wc(a).writeContract({ chain: null, address: token, abi: testTokenAbi, functionName: "approve", args: [jinxEscrow, 2n ** 256n - 1n] }));
   }
 
-  server = await startServer({
+  const dataDir = mkdtempSync(join(tmpdir(), "playpot-jinx-"));
+  const serverConfig = {
     rpcUrl: RPC,
     escrow,
     jinxEscrow,
-    refereePk: KEYS.referee,
+    refereePk: KEYS.referee as Hex,
     port: 0,
-    dataDir: mkdtempSync(join(tmpdir(), "playpot-jinx-")),
+    dataDir,
     resultWaitMs: 1500,
     clock: () => fake,
     jinxRoom: { startDelayMs: 0, turnGapMs: 0, gameGapMs: 0, revealMs: 4000 },
-  });
-  const wsUrl = `ws://127.0.0.1:${server.port}`;
-  const httpUrl = `http://127.0.0.1:${server.port}`;
+  };
+  server = await startServer(serverConfig);
+  let wsUrl = `ws://127.0.0.1:${server.port}`;
+  let httpUrl = `http://127.0.0.1:${server.port}`;
   ok(`referee on :${server.port}`);
   const cfg = (await (await fetch(`${httpUrl}/config`)).json()) as { jinx?: { escrow: Address } };
   assert.equal(cfg.jinx?.escrow.toLowerCase(), jinxEscrow.toLowerCase());
@@ -412,6 +422,38 @@ try {
     const a = await claimable(wallets.alice.address);
     ok(`refunded (alice's credit is now ${a})`);
     assert.equal((await getMatch(id)).status, 4);
+    noErrors(p1, p2);
+  }
+
+  // ---------------------------------------------------------------------------------------------- F
+  log("F. the referee restarts in the middle of a match: both players reconnect and the match carries on from its saved log");
+  {
+    // Bob stalls from turn 3 on, so the match waits there while we restart the server.
+    const { id, p1, p2 } = await newMatch(3, P1_WINS, [24, 20, 14]);
+    await until("three turns to resolve", () => p1.entries.length === 3 && p2.entries.length === 3);
+    await until("alice's turn-3 pick to be received", () => p1.receipts.has(3));
+    const savedTurns = (await fetchLog(id)).turns.length;
+    assert.equal(savedTurns, 3);
+    p1.ws.close();
+    p2.ws.close();
+    await server!.close();
+    ok("the referee is down, mid-turn, with a pick already committed");
+
+    server = await startServer(serverConfig);
+    wsUrl = `ws://127.0.0.1:${server.port}`;
+    httpUrl = `http://127.0.0.1:${server.port}`;
+    assert.equal((await fetchLog(id)).turns.length, 3, "the new server serves the saved log before anyone reconnects");
+    for (let t = 3; t < 6; t++) p2.picks[t] = P2_PICKS[t]; // bob is back
+    await p1.connect(wsUrl);
+    await p2.connect(wsUrl);
+    await until("both players to see the end", () => !!p1.ended && !!p2.ended, 20_000);
+    assert.equal(p1.ended!.result, 1);
+    assert.equal(p1.entries.length, 6);
+    await until("instant settlement", () => !!p1.settled, 20_000);
+    assert.equal(p1.settled!.mode, "instant");
+    const served = await fetchLog(id);
+    assert.deepEqual((await verifyJinxLog(served)).errors, []);
+    ok("the match resumed after the restart, finished, verified and settled instantly");
     noErrors(p1, p2);
   }
 

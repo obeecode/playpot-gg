@@ -341,6 +341,58 @@ export class JinxRoom {
     };
   }
 
+  /** Applies one revealed turn to the game and match state, and sets `result` when the match is decided. */
+  private applyRules(turn: number, a: number | null, b: number | null) {
+    const r = jinx.applyTurn(this.game, a, b);
+    this.game = r.state;
+    let gameOver = false;
+    if (r.doubleForfeit) {
+      this.result = 3;
+    } else if (r.outcome !== "ongoing") {
+      gameOver = true;
+      const rec = jinx.recordGame(this.match, r.outcome);
+      this.match = rec.match;
+      if (rec.winner) this.result = rec.winner;
+      else {
+        this.game = jinx.newGame(jinx.isDeathMatch(this.match));
+        this.gameNumber++;
+      }
+    }
+    if (this.result === 0 && turn + 1 === jinx.MAX_MATCH_TURNS) this.result = 3;
+    return { r, gameOver };
+  }
+
+  /**
+   * Rebuilds a room from its saved log after a restart. The caller has already verified the log. A turn that was
+   * open when the server stopped is simply opened again: the commitments for it were never part of the log.
+   */
+  restore(saved: JinxMatchLog): void {
+    if (this.entries.length || saved.matchId !== this.info.matchId.toString()) throw new Error("cannot restore into this room");
+    const id = this.info.matchId;
+    let head = jinxGenesis(id);
+    saved.turns.forEach((e, turn) => {
+      const one = (s: JinxSide) =>
+        s.missed ? { commitment: s.missKind === 1 ? s.commitment : ZERO32, cell: null } : { commitment: commitmentOf(id, turn, s.cell, s.salt), cell: s.cell };
+      const a = one(e.a);
+      const b = one(e.b);
+      head = jinxChain(head, turn, a.commitment, b.commitment, a.cell ?? NO_PICK, b.cell ?? NO_PICK);
+      this.entries.push(e);
+      this.applyRules(turn, a.cell, b.cell);
+    });
+    this.head = head;
+    this.sig1 = saved.sig1;
+    this.sig2 = saved.sig2;
+    if (this.result !== 0) {
+      this.phase = "ended";
+      this.finalHash = head;
+      this.refSig = saved.refSig;
+      this.turn = this.entries.length - 1;
+    } else {
+      this.turn = this.entries.length;
+      this.phase = "gap";
+    }
+  }
+
   private async resolveTurn(nowMs: number): Promise<JinxEvent[]> {
     const a = this.sideEntry(1);
     const b = this.sideEntry(2);
@@ -349,27 +401,11 @@ export class JinxRoom {
     const entry: JinxTurnLog = { a: a.entry, b: b.entry };
     this.entries.push(entry);
 
-    const r = jinx.applyTurn(this.game, a.cell, b.cell);
-    this.game = r.state;
+    const { r, gameOver } = this.applyRules(turn, a.cell, b.cell);
     const events: JinxEvent[] = [
       { type: "turn", turn, entry, outcome: r.outcome, flags: { jinx: r.jinx, doubleWin: r.doubleWin, cleared: r.cleared, forfeit: r.forfeit } },
     ];
-
-    let gameOver = false;
-    if (r.doubleForfeit) {
-      this.result = 3;
-    } else if (r.outcome !== "ongoing") {
-      gameOver = true;
-      const rec = jinx.recordGame(this.match, r.outcome);
-      this.match = rec.match;
-      events.push({ type: "game-over", turn, outcome: r.outcome, wins: rec.match.wins, draws: rec.match.draws });
-      if (rec.winner) this.result = rec.winner;
-      else {
-        this.game = jinx.newGame(jinx.isDeathMatch(this.match));
-        this.gameNumber++;
-      }
-    }
-    if (this.result === 0 && turn + 1 === jinx.MAX_MATCH_TURNS) this.result = 3;
+    if (gameOver) events.push({ type: "game-over", turn, outcome: r.outcome, wins: this.match.wins, draws: this.match.draws });
 
     if (this.result !== 0) {
       this.phase = "ended";

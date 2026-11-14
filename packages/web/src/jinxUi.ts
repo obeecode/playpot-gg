@@ -1,5 +1,5 @@
 // Pure helpers for the JINX screens: replaying a log into boards, describing a turn, and the clock maths.
-import { jinx, TURN_LIMIT_MS, type JinxSide, type JinxTurnLog } from "@playpot/game";
+import { jinx, TURN_LIMIT_MS } from "@playpot/game";
 
 export const cellName = (i: number): string => "ABCDE"[i % 5] + (Math.floor(i / 5) + 1);
 
@@ -31,10 +31,21 @@ export interface Replay {
   result: number; // 0 while undecided, 1/2 winner, 3 refund
 }
 
-const pickOf = (s: JinxSide): number | null => (s.missed ? null : s.cell);
+/** What the screens need from one side of a turn. A signed log entry satisfies it, and so does a practice turn. */
+export interface PickLike {
+  missed: boolean;
+  missKind: 0 | 1;
+  cell: number;
+}
+export interface TurnLike {
+  a: PickLike;
+  b: PickLike;
+}
+
+const pickOf = (s: PickLike): number | null => (s.missed ? null : s.cell);
 
 /** Replays the turns of a match with the shared rules. Does not check signatures; verifyJinxLog does that. */
-export function replayJinx(entries: JinxTurnLog[], bestOf: 3 | 5): Replay {
+export function replayJinx(entries: readonly TurnLike[], bestOf: 3 | 5): Replay {
   let game = jinx.newGame(false);
   let match = jinx.newMatch(bestOf);
   let gameNumber = 1;

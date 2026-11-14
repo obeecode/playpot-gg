@@ -159,6 +159,10 @@ Simultaneous-move tic-tac-toe on a 5x5 board: both players pick a square at the 
 
 **What is still trusted: the referee's clock.** "You missed the clock" is the referee's word. The one provable fraud is a miss the referee contradicts with its own receipt: if it signed "received your pick at 6.2s" and also "you missed turn 4", the contract voids the miss (`voidMiss`). A pick the referee silently drops cannot be proven. A hardware-attested referee is what closes that.
 
+**Practice mode.** The lobby has a "Play JINX against the bot" button. It runs entirely in the browser (no wallet, no stake, nothing on-chain) with the same rules and the same 10 second clock, so new players can learn the game first. `npm run ui-test:practice` drives it on a desktop and a phone-sized screen.
+
+**Restarts.** The referee saves each match's log after every turn. If it restarts mid-match, the next join re-verifies the saved log and resumes from the last finished turn (a turn that was open is simply opened again), and a finished match that was not yet paid out is settled. Browsers reconnect on their own. A log that fails verification is moved aside as `.bad` and the room starts clean.
+
 Play it locally with `npm run live` (the JINX tab). To deploy it next to the existing contracts on Base Sepolia:
 
 ```powershell
@@ -203,7 +207,7 @@ Source is verified on Basescan. Parameters: 3% rake (immutable cap 10%), 30 minu
 - **No clocks.** Tic-tac-toe v0 has no timeouts. A stalled game ends at the match deadline via `abort`. Clock handling is the part a real referee must be trusted for, and comes with chess.
 - **A referee signature is required to open the window path.** If the referee is down and both players agree, they cannot settle early; `abort` refunds after the deadline.
 - **Session keys are registered by the transaction itself** (`createOffer` / `challenge` record the key), so no separate EIP-712 authorization is needed on-chain.
-- **Referee state is in memory plus JSON logs on disk.** One server, no HA.
+- **Referee state is in memory plus JSON logs on disk.** One server, no HA. JINX matches resume after a restart; the tic-tac-toe room restores from its log the same way.
 - **Engine-assisted cheating cannot be solved on-chain** (relevant for chess).
 - **Unaudited.** Do not point real value at it.
 
