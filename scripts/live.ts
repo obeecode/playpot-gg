@@ -41,6 +41,7 @@ if (existing) {
     dataDir: process.env.DATA_DIR ?? "data",
     resultWaitMs: Number(process.env.RESULT_WAIT_MS ?? 15000),
     webDir: "packages/web/dist",
+    paymasterUrl: process.env.PAYMASTER_URL,
   });
   console.log(`\nReferee ${server.referee} serving ${process.env.ESCROW} via ${rpc}`);
 } else {

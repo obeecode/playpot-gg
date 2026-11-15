@@ -53,6 +53,7 @@ import {
 } from "@playpot/game";
 import { cellName, clockRemaining, describeTiers, describeTurn, money, pct, rakeBpsFor, replayJinx, RING, type Limits } from "./jinxUi.ts";
 import { Practice } from "./practice.ts";
+import { call, coinbaseSmartProvider, sendBatch, type Call, type Eip1193 } from "./wallet.ts";
 
 // ------------------------------------------------------------------------------- types & state
 
@@ -63,6 +64,7 @@ interface Config {
   referee: Address;
   rpcUrl: string;
   jinx?: { escrow: Address; token: Address; limits?: Limits };
+  paymasterUrl?: string; // a gas sponsor for smart wallets, when the operator has set one up
 }
 interface Offer {
   bestOf?: number;
@@ -129,6 +131,7 @@ const S = {
   game: (localStorage.getItem("playpot:game") === "jinx" ? "jinx" : "ttt") as "ttt" | "jinx",
   bestOfInput: 3 as 3 | 5,
   jview: null as JinxView | null,
+  smart: null as Eip1193 | null, // set while signed in with a passkey (smart) wallet
   practice: null as Practice | null,
   practiceBestOf: 3 as 3 | 5,
   practiceClock: undefined as ReturnType<typeof setInterval> | undefined,
@@ -167,7 +170,25 @@ const toOnChain = (m: StateMatch): OnChain => ({
 const read = <T,>(address: Address, abi: unknown, functionName: string, args: unknown[] = []) =>
   S.pub!.readContract({ address, abi, functionName, args } as never) as Promise<T>;
 
+type Receipt = { logs: Array<{ address: Address; topics: Hex[]; data: Hex }> };
+
+/** A smart wallet sends everything as one batched call (one confirmation), with gas sponsored when a sponsor is set. */
+async function batch(calls: Call[]): Promise<Receipt> {
+  const r = await sendBatch(S.smart!, S.addr!, S.cfg!.chainId, calls, { paymasterUrl: S.cfg!.paymasterUrl });
+  return { logs: r.logs };
+}
+
+/** Several contract calls that belong together, such as approving tokens and then using them: one batch for a smart
+ *  wallet, one transaction after another for any other wallet. */
+async function writeMany(calls: Array<[Address, unknown, string, unknown[]]>): Promise<Receipt> {
+  if (S.smart) return batch(calls.map(([to, abi, fn, args]) => call(to, abi, fn, args)));
+  let last: Receipt = { logs: [] };
+  for (const [to, abi, fn, args] of calls) last = (await write(to, abi, fn, args)) as unknown as Receipt;
+  return last;
+}
+
 async function write(address: Address, abi: unknown, functionName: string, args: unknown[]) {
+  if (S.smart) return batch([call(address, abi, functionName, args)]) as never;
   // The local chain's fees are known, so skip the estimation round trips (each can take seconds over a tunnel).
   const local = S.cfg!.chainId === 31337;
   const hash = await S.wallet!.writeContract({
@@ -245,7 +266,16 @@ async function init() {
     localStorage.setItem("playpot:server", S.serverUrl);
     if (S.game === "jinx" && !cfg.jinx) S.game = "ttt";
     fetch(`${S.serverUrl}/manifest.json`).then((r) => r.json()).then((m: { root?: string }) => { S.build = (m.root ?? "").slice(0, 12); render(); }).catch(() => {});
-    if (params.has("burner") || !window.ethereum) await connect(true);
+    let restored = false;
+    if (localStorage.getItem("playpot:wallet") === "smart" && !params.has("burner")) {
+      try {
+        await connectSmart(true); // the wallet remembers the session: no popup if it is still signed in
+        restored = true;
+      } catch {
+        S.smart = null;
+      }
+    }
+    if (!restored && (params.has("burner") || !window.ethereum)) await connect(true);
   } catch (e) {
     S.msg = `Cannot reach the referee server at ${S.serverUrl}: ${(e as Error).message}`;
   }
@@ -264,8 +294,30 @@ async function init() {
   });
 }
 
+/** Signs in with a passkey or email (a smart wallet on Base). The player needs no extension and no seed phrase. */
+async function connectSmart(silent = false) {
+  if (!S.cfg || !S.chain) return;
+  const provider = await coinbaseSmartProvider(S.cfg.chainId);
+  const accounts = (await provider.request({ method: silent ? "eth_accounts" : "eth_requestAccounts" })) as Address[];
+  if (!accounts?.length) throw new Error("no account");
+  try {
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: toHex(S.cfg.chainId) }] });
+  } catch {
+    /* the wallet is already on this chain, or switches itself */
+  }
+  S.smart = provider;
+  S.burner = false;
+  S.addr = accounts[0];
+  S.acct = accounts[0];
+  S.wallet = createWalletClient({ account: accounts[0], chain: S.chain, transport: custom(provider as never) });
+  S.needAcct = true;
+  localStorage.setItem("playpot:wallet", "smart");
+}
+
 async function connect(burner: boolean) {
   if (!S.cfg || !S.chain) return;
+  S.smart = null;
+  localStorage.removeItem("playpot:wallet");
   if (burner) {
     const name = params.get("burner") || "default";
     const key = `playpot:burner:${name}`;
@@ -347,6 +399,7 @@ async function refresh() {
 
 const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
   connect: () => run("Connect wallet", () => connect(false)),
+  smart: () => run("Sign in", () => connectSmart()),
   burner: () => run("Use burner wallet", () => connect(true)),
   mint: () =>
     run("Mint 1000 test tokens", async () => {
@@ -369,13 +422,15 @@ const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
       const lim = S.game === "jinx" ? S.cfg?.jinx?.limits : undefined;
       if (lim && stake < BigInt(lim.minStake)) throw new Error(`The minimum stake is ${money(BigInt(lim.minStake))} tPUSD each.`);
       if (lim && stake > BigInt(lim.maxStake)) throw new Error(`The maximum stake is ${money(BigInt(lim.maxStake))} tPUSD each for now.`);
-      if (S.allowance < stake) await write(G().token, testTokenAbi, "approve", [G().escrow, 2n ** 256n - 1n]);
       const pk = generatePrivateKey();
       const expiry = S.now + 86_400n;
       const key = privateKeyToAccount(pk).address;
       const jinxGame = S.game === "jinx";
-      const rcpt = await escrowWrite("createOffer", jinxGame ? [stake, expiry, key, S.bestOfInput] : [stake, expiry, key]);
-      const ev = parseEventLogs({ abi: G().abi as typeof potEscrowAbi, logs: rcpt.logs, eventName: "OfferCreated" })[0];
+      const calls: Array<[Address, unknown, string, unknown[]]> = [];
+      if (S.allowance < stake) calls.push([G().token, testTokenAbi, "approve", [G().escrow, 2n ** 256n - 1n]]);
+      calls.push([G().escrow, G().abi, "createOffer", jinxGame ? [stake, expiry, key, S.bestOfInput] : [stake, expiry, key]]);
+      const rcpt = await writeMany(calls);
+      const ev = parseEventLogs({ abi: G().abi as typeof potEscrowAbi, logs: rcpt.logs as never, eventName: "OfferCreated" })[0];
       saveSk(ev.args.id, pk);
     }),
   cancel: (el) =>
@@ -386,9 +441,11 @@ const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
     run("Challenge", async () => {
       const id = BigInt(el.dataset.id!);
       const stake = BigInt(el.dataset.stake!);
-      if (S.allowance < stake) await write(G().token, testTokenAbi, "approve", [G().escrow, 2n ** 256n - 1n]);
       const pk = generatePrivateKey();
-      await escrowWrite("challenge", [id, privateKeyToAccount(pk).address]);
+      const calls: Array<[Address, unknown, string, unknown[]]> = [];
+      if (S.allowance < stake) calls.push([G().token, testTokenAbi, "approve", [G().escrow, 2n ** 256n - 1n]]);
+      calls.push([G().escrow, G().abi, "challenge", [id, privateKeyToAccount(pk).address]]);
+      await writeMany(calls);
       saveSk(id, pk);
       await openMatch(id);
     }),
@@ -1123,7 +1180,8 @@ function limitsHint(): string {
 /** A short checklist for a first-time player, shown until the wallet has gas and test tokens. */
 function getStarted(cfg: Config): string {
   const hasWallet = !!S.addr;
-  const hasGas = S.eth > 0n;
+  const sponsored = !!S.smart && !!cfg.paymasterUrl; // the operator pays the gas for passkey wallets
+  const hasGas = S.eth > 0n || sponsored;
   const hasTokens = S.tokens > 0n;
   if (hasWallet && hasGas && hasTokens) return "";
   const mark = (ok: boolean) => (ok ? '<span class="ok">&#10003;</span>' : '<span class="dim">&#9675;</span>');
@@ -1133,8 +1191,8 @@ function getStarted(cfg: Config): string {
       : "Your wallet needs a little ETH for gas.";
   return `<section id="start"><h2>Get started</h2>
     <ol class="steps">
-      <li>${mark(hasWallet)} <b>Pick a wallet.</b> Use MetaMask, or the burner wallet that lives in this browser.</li>
-      <li>${mark(hasGas)} <b>Get gas.</b> ${faucet}</li>
+      <li>${mark(hasWallet)} <b>Sign in.</b> Use a passkey or email (nothing to install), or MetaMask, or the burner wallet that lives in this browser.</li>
+      <li>${mark(hasGas)} <b>Gas.</b> ${sponsored ? "Covered for you: passkey wallets pay no gas here." : faucet}</li>
       <li>${mark(hasTokens)} <b>Mint test tokens.</b> They have no value. Press &ldquo;Mint 1000 test tokens&rdquo; in the Wallet box.</li>
       <li class="dim">Then create an offer, or challenge someone. Want to learn JINX first? Try the practice game: it needs no wallet.</li>
     </ol></section>`;
@@ -1169,9 +1227,9 @@ function render() {
   }
   html += `<section><h2>Wallet</h2>`;
   if (!S.addr) {
-    html += `<div class="row">${window.ethereum ? '<button class="primary" data-act="connect">Connect wallet</button>' : ""}<button data-act="burner">Use burner wallet</button></div>`;
+    html += `<div class="row"><button class="primary" data-act="smart" id="smart">Sign in with passkey or email</button>${window.ethereum ? '<button data-act="connect">Connect MetaMask</button>' : ""}<button data-act="burner">Use burner wallet</button></div>`;
   } else {
-    html += `<div class="row mono" id="addr">${S.addr}${S.burner ? ' <span class="dim">(burner)</span>' : ""}</div>
+    html += `<div class="row mono" id="addr">${S.addr}${S.burner ? ' <span class="dim">(burner)</span>' : S.smart ? ' <span class="dim">(passkey wallet)</span>' : ""}</div>
       <div class="row"><span>ETH <b id="eth">${Number(formatEther(S.eth)).toFixed(4)}</b></span>
       <span>tPUSD <b id="tokens">${tok(S.tokens)}</b></span>
       <span>Claimable <b id="claimable">${tok(S.claimable)}</b></span></div>
@@ -1179,6 +1237,7 @@ function render() {
         `<button data-act="mint" ${S.busy ? "disabled" : ""}>Mint 1000 test tokens</button>`,
         `<button data-act="claim" ${S.busy || S.claimable === 0n ? "disabled" : ""}>Claim winnings</button>`,
         cfg.chainId === 31337 ? `<button data-act="fund">Dev: 10 ETH</button>` : "",
+        S.smart ? "" : `<button data-act="smart" id="smart">Use a passkey wallet instead</button>`,
       ].join("")}</div>`;
   }
   html += `</section>`;

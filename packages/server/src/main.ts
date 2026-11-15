@@ -25,6 +25,7 @@ export interface ServerConfig {
   jinxRoom?: JinxRoomOptions;
   clock?: () => number; // tests inject a fake clock
   webDir?: string; // serve the built web client from this folder
+  paymasterUrl?: string; // an ERC-7677 gas sponsor (for example Coinbase's): passkey wallets send it with each batch so players need no ETH
   proxyRpc?: boolean; // expose a restricted /rpc proxy so browsers need no direct chain access (local chains)
 }
 
@@ -266,6 +267,7 @@ export async function startServer(cfg: ServerConfig) {
           referee: referee.address,
           rpcUrl,
           jinx: jinxChain ? { escrow: jinxChain.escrow, token: jinxToken, limits: await jinxLimits() } : undefined,
+          paymasterUrl: cfg.paymasterUrl,
         });
       }
       if (url.pathname === "/rpc" && cfg.proxyRpc && req.method === "POST") {

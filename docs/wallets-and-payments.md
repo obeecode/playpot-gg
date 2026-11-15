@@ -1,6 +1,6 @@
 # PlayPot.GG: wallets and payments
 
-Status: design decision, not yet built. Testnet today uses MetaMask or a burner wallet. Legal review is parked (see "Open questions").
+Status: the sign-in and sponsored-gas part is built (passkey wallets via Coinbase Smart Wallet, batched calls, optional gas sponsor; see the README). On-ramps, USDC and mainnet are not. Legal review is parked (see "Open questions").
 
 ## The decision
 

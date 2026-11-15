@@ -9,6 +9,7 @@
     "test": "node --test src/*.test.ts"
   },
   "dependencies": {
+    "@coinbase/wallet-sdk": "^4.4.0",
     "@playpot/game": "*",
     "viem": "^2.21.0"
   },

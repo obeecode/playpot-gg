@@ -238,6 +238,20 @@ Then run the game with `$env:JINX_ESCROW = $J` (the server reads the limits and 
 
 Tests: `forge test --match-contract JinxEscrowV2Test` (51 tests, including fuzzing of the rake rules and of pot accounting), and `npm run e2e:jinx:v2` plays every scenario, including the false-miss slash, with real signatures from the TypeScript client. Tic-tac-toe stays on its v0 contract; new games (chess) will start from the v2 money rules.
 
+## Passkey wallets and gas sponsoring
+
+The wallet box has **Sign in with passkey or email**: it creates a Coinbase Smart Wallet on Base (nothing to install, no seed phrase). MetaMask and the burner wallet still work. Everything a passkey player does is sent as one batched call (EIP-5792 `wallet_sendCalls`), so creating an offer or accepting a challenge is **one confirmation** instead of approve-then-act. The wallet remembers the session, so a reload signs back in without a popup. The smart wallet is a contract account: stakes are pulled from it and winnings are claimed to it like any other address, so the escrow contracts needed no change.
+
+**Gas sponsoring is optional and off by default.** Without it, a passkey wallet needs a little ETH like any other wallet (the checklist and the "Copy my address" button explain this). With it, players need no ETH at all. Set `PAYMASTER_URL` to an ERC-7677 paymaster endpoint before `npm run live`:
+
+```powershell
+$env:PAYMASTER_URL = "https://api.developer.coinbase.com/rpc/v1/base-sepolia/<your key>"
+```
+
+Coinbase's Developer Platform offers one (create a project, open Paymaster, and allow-list the contracts the players call: the token, the JINX escrow and the tic-tac-toe escrow; check their docs for the current steps and limits). The server hands the URL to the browser with `/config`, and the wallet attaches it to each batch. Because anyone can read it, **restrict it on the provider's side** to those contract addresses and set a spending limit. Gas on Base is cents, so a sponsored game costs about that much; measure it during the beta.
+
+`npm run ui-test:smart` plays a full match through a fake smart wallet that holds zero ETH, checks that approve and offer go out as one batch with the sponsor attached, and checks the reload sign-in. It does not exercise the real Coinbase popup, which needs a real browser and passkey: try that by hand on app.playpot.gg after deploying.
+
 ## Known limits of v0
 
 - **Mock referee.** One plain key signs as the referee. Phase 2 moves it into an attested enclave; until then, the referee can only affect settlement by colluding with a player, and the dispute path above overturns that.
