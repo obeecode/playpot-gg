@@ -54,7 +54,22 @@ import {
 import { cellName, clockRemaining, describeTiers, describeTurn, money, pct, rakeBpsFor, replayJinx, RING, type Limits } from "./jinxUi.ts";
 import { Practice } from "./practice.ts";
 import { call, sendBatch, type Call, type Eip1193 } from "./wallet.ts";
-import { createPasskey, openPasskeyWallet, savedPasskey, signInWithPasskey } from "./passkey.ts";
+import { createPasskey, openPasskeyWallet, openSmartWallet, savedPasskey, signInWithPasskey } from "./passkey.ts";
+import {
+  decryptWalletKey,
+  emailStart,
+  emailVerify,
+  encryptWalletKey,
+  fetchVault,
+  localVault,
+  newWalletKey,
+  passphraseProblem,
+  rememberSessionKey,
+  rememberVault,
+  saveVault,
+  sessionKey,
+  type VaultBlob,
+} from "./emailWallet.ts";
 
 // ------------------------------------------------------------------------------- types & state
 
@@ -66,6 +81,20 @@ interface Config {
   rpcUrl: string;
   jinx?: { escrow: Address; token: Address; limits?: Limits };
   aa?: { enabled: boolean; sponsored: boolean }; // passkey wallets: available on this server, and whether gas is paid for players
+  email?: { enabled: boolean }; // email sign-in is switched on
+}
+
+interface EmailFlow {
+  step: "email" | "code" | "newpass" | "unlock";
+  email: string;
+  code: string;
+  pass: string;
+  pass2: string;
+  token?: string;
+  vault?: VaultBlob;
+  note: string;
+  error: string;
+  busy: boolean;
 }
 interface Offer {
   bestOf?: number;
@@ -132,7 +161,9 @@ const S = {
   game: (localStorage.getItem("playpot:game") === "jinx" ? "jinx" : "ttt") as "ttt" | "jinx",
   bestOfInput: 3 as 3 | 5,
   jview: null as JinxView | null,
-  smart: null as Eip1193 | null, // set while signed in with a passkey (smart) wallet
+  smart: null as Eip1193 | null, // set while signed in with a passkey or email (smart) wallet
+  walletKind: "passkey" as "passkey" | "email",
+  email: null as EmailFlow | null, // the email sign-in form, while it is open
   practice: null as Practice | null,
   practiceBestOf: 3 as 3 | 5,
   practiceClock: undefined as ReturnType<typeof setInterval> | undefined,
@@ -276,6 +307,17 @@ async function init() {
         S.smart = null;
       }
     }
+    if (!restored && localStorage.getItem("playpot:wallet") === "email" && !params.has("burner")) {
+      const k = sessionKey(); // an email wallet opened in this tab: a reload does not ask for the passphrase again
+      if (k) {
+        try {
+          await connectEmailKey(k);
+          restored = true;
+        } catch {
+          S.smart = null;
+        }
+      }
+    }
     if (!restored && (params.has("burner") || !window.ethereum)) await connect(true);
   } catch (e) {
     S.msg = `Cannot reach the referee server at ${S.serverUrl}: ${(e as Error).message}`;
@@ -314,13 +356,130 @@ async function connectPasskey(mode: PasskeyMode) {
     if (mode === "signin") rec = await signInWithPasskey(S.serverUrl);
     ({ provider, address } = await openPasskeyWallet(rec!, { publicClient: S.pub, serverUrl: S.serverUrl, sponsored: !!S.cfg.aa.sponsored }));
   }
+  applySmart(provider, address, "passkey");
+  localStorage.setItem("playpot:wallet", "smart");
+}
+
+function applySmart(provider: Eip1193, address: Address, kind: "passkey" | "email") {
   S.smart = provider;
+  S.walletKind = kind;
   S.burner = false;
   S.addr = address;
   S.acct = address;
-  S.wallet = createWalletClient({ account: address, chain: S.chain, transport: custom(provider as never) });
+  S.wallet = createWalletClient({ account: address, chain: S.chain!, transport: custom(provider as never) });
   S.needAcct = true;
-  localStorage.setItem("playpot:wallet", "smart");
+}
+
+/** An email wallet: a smart account whose owner key was opened with the player's passphrase. */
+async function connectEmailKey(pk: Hex) {
+  if (!S.cfg || !S.chain || !S.pub) return;
+  if (!S.cfg.aa?.enabled) throw new Error("wallets are not switched on for this server");
+  const { provider, address } = await openSmartWallet(privateKeyToAccount(pk), { publicClient: S.pub, serverUrl: S.serverUrl, sponsored: !!S.cfg.aa.sponsored });
+  applySmart(provider, address, "email");
+  rememberSessionKey(pk);
+  localStorage.setItem("playpot:wallet", "email");
+}
+
+// ------------------------------------------------------------------------------------------- the email sign-in form
+
+function openEmailFlow() {
+  const v = localVault();
+  S.email = { step: v ? "unlock" : "email", email: "", code: "", pass: "", pass2: "", vault: v ?? undefined, note: v ? "Welcome back. Enter your passphrase to unlock the wallet saved on this device." : "", error: "", busy: false };
+  render();
+}
+
+/** Runs one step of the form: shows it is working, and puts any problem in the form itself. */
+async function emailStep(fn: (f: EmailFlow) => Promise<void>) {
+  const f = S.email;
+  if (!f || f.busy) return;
+  f.busy = true;
+  f.error = "";
+  render();
+  try {
+    await fn(f);
+  } catch (e) {
+    f.error = (e as Error).message;
+  }
+  f.busy = false;
+  render();
+  if (S.addr) void refresh();
+}
+
+const emailActions = {
+  emailopen: () => openEmailFlow(),
+  emailclose: () => {
+    S.email = null;
+    render();
+  },
+  emailother: () => {
+    if (S.email) Object.assign(S.email, { step: "email", vault: undefined, token: undefined, code: "", pass: "", pass2: "", error: "", note: "" });
+    render();
+  },
+  emailsend: () =>
+    emailStep(async (f) => {
+      await emailStart(S.serverUrl, f.email.trim());
+      f.step = "code";
+      f.note = `We sent a 6-digit code to ${f.email.trim()}. It works for 10 minutes. Check your spam folder if it is not there.`;
+    }),
+  emailverify: () =>
+    emailStep(async (f) => {
+      const r = await emailVerify(S.serverUrl, f.email.trim(), f.code.trim());
+      f.token = r.token;
+      if (r.hasVault) {
+        f.vault = (await fetchVault(S.serverUrl, r.token)).blob;
+        f.step = "unlock";
+        f.note = "This email already has a wallet. Enter its passphrase.";
+      } else {
+        f.step = "newpass";
+        f.note = "This is a new wallet. Choose a passphrase. It encrypts your wallet key in this browser. Nobody can recover it for you, PlayPot included.";
+      }
+    }),
+  emailfinish: () =>
+    emailStep(async (f) => {
+      let pk: Hex;
+      if (f.step === "newpass") {
+        const problem = passphraseProblem(f.pass);
+        if (problem) throw new Error(problem);
+        if (f.pass !== f.pass2) throw new Error("The two passphrases do not match.");
+        pk = newWalletKey();
+        const blob = await encryptWalletKey(pk, f.pass);
+        await saveVault(S.serverUrl, f.token!, blob);
+        rememberVault(blob);
+      } else {
+        pk = await decryptWalletKey(f.vault!, f.pass);
+        rememberVault(f.vault!);
+      }
+      await connectEmailKey(pk);
+      S.email = null;
+    }),
+};
+
+function emailForm(): string {
+  const f = S.email;
+  if (!f) return "";
+  const dis = f.busy ? "disabled" : "";
+  const field = (id: string, label: string, value: string, type = "text", extra = "") => `<label class="dim">${label}</label><input id="${id}" type="${type}" value="${esc(value)}" ${extra} ${dis} class="wide" />`;
+  const body =
+    f.step === "email"
+      ? `${field("em-email", "Email", f.email, "email", 'autocomplete="email"')}<button class="primary" data-act="emailsend" id="emailsend" ${dis}>Send me a code</button>`
+      : f.step === "code"
+        ? `${field("em-code", "6-digit code", f.code, "text", 'inputmode="numeric" maxlength="6" autocomplete="one-time-code"')}<button class="primary" data-act="emailverify" id="emailverify" ${dis}>Check code</button><button data-act="emailother" ${dis}>Use a different email</button>`
+        : f.step === "newpass"
+          ? `${field("em-pass", "Passphrase", f.pass, "password", 'autocomplete="new-password"')}${field("em-pass2", "Same passphrase again", f.pass2, "password", 'autocomplete="new-password"')}<button class="primary" data-act="emailfinish" id="emailfinish" ${dis}>Create my wallet</button>`
+          : `${field("em-pass", "Passphrase", f.pass, "password", 'autocomplete="current-password"')}<button class="primary" data-act="emailfinish" id="emailfinish" ${dis}>Unlock</button><button data-act="emailother" ${dis}>Use a different email</button>`;
+  return `<div id="emailform" class="emailform">
+    <h2>Sign in with email</h2>
+    ${f.note ? `<div class="dim">${esc(f.note)}</div>` : ""}
+    <div class="row">${body}<button data-act="emailclose" ${dis}>Cancel</button></div>
+    ${f.busy ? '<div class="dim"><span class="spin"></span>Working…</div>' : ""}
+    ${f.error ? `<div class="bad" id="emailerror">${esc(f.error)}</div>` : ""}
+  </div>`;
+}
+
+/** The email sign-in button, shown when the server can send codes and relay wallet operations. */
+function emailButton(): string {
+  if (!S.cfg?.email?.enabled || !S.cfg.aa?.enabled) return "";
+  return `<button data-act="emailopen" id="emailopen" ${S.busy || S.email ? "disabled" : ""}>${localVault() ? "Unlock email wallet" : "Sign in with email"}</button>`;
 }
 
 async function connect(burner: boolean) {
@@ -408,6 +567,7 @@ async function refresh() {
 
 const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
   connect: () => run("Connect wallet", () => connect(false)),
+  ...emailActions,
   pkcreate: () => run("Create passkey wallet", () => connectPasskey("create")),
   pksign: () => run("Sign in", () => connectPasskey("signin")),
   burner: () => run("Use burner wallet", () => connect(true)),
@@ -501,6 +661,13 @@ app.addEventListener("input", (e) => {
   }
   if (t.id === "bestof") S.bestOfInput = t.value === "5" ? 5 : 3;
   if (t.id === "pbestof") S.practiceBestOf = t.value === "5" ? 5 : 3;
+  if (S.email && t.id.startsWith("em-")) {
+    const f = S.email;
+    if (t.id === "em-email") f.email = t.value;
+    if (t.id === "em-code") f.code = t.value;
+    if (t.id === "em-pass") f.pass = t.value;
+    if (t.id === "em-pass2") f.pass2 = t.value;
+  }
   if (t.id === "jstep" && S.jview) {
     S.jview.step = Number(t.value);
     render();
@@ -1218,7 +1385,8 @@ function getStarted(cfg: Config): string {
 
 function render() {
   const focus = document.activeElement as HTMLInputElement | null;
-  const keep = focus && focus.id === "stake" ? { start: focus.selectionStart, end: focus.selectionEnd } : null;
+  const keepable = !!focus && (focus.id === "stake" || focus.id.startsWith("em-"));
+  const keep = keepable ? { id: focus!.id, start: focus!.selectionStart, end: focus!.selectionEnd } : null;
   const cfg = S.cfg;
   const jinxGame = (S.game === "jinx" && !!cfg?.jinx) || !!S.practice;
   let html = `<h1>PlayPot.GG <span class="dim">${jinxGame ? "JINX" : "tic-tac-toe"} &middot; testnet only</span></h1>
@@ -1245,9 +1413,9 @@ function render() {
   }
   html += `<section><h2>Wallet</h2>`;
   if (!S.addr) {
-    html += `<div class="row">${passkeyButtons(true)}${window.ethereum ? '<button data-act="connect">Connect MetaMask</button>' : ""}<button data-act="burner">Use burner wallet</button></div>`;
+    html += `<div class="row">${passkeyButtons(true)}${emailButton()}${window.ethereum ? '<button data-act="connect">Connect MetaMask</button>' : ""}<button data-act="burner">Use burner wallet</button></div>${emailForm()}`;
   } else {
-    html += `<div class="row mono" id="addr">${S.addr}${S.burner ? ' <span class="dim">(burner)</span>' : S.smart ? ' <span class="dim">(passkey wallet)</span>' : ""}</div>
+    html += `<div class="row mono" id="addr">${S.addr}${S.burner ? ' <span class="dim">(burner)</span>' : S.smart ? ` <span class="dim">(${S.walletKind} wallet)</span>` : ""}</div>
       <div class="row"><span>ETH <b id="eth">${Number(formatEther(S.eth)).toFixed(4)}</b></span>
       <span>tPUSD <b id="tokens">${tok(S.tokens)}</b></span>
       <span>Claimable <b id="claimable">${tok(S.claimable)}</b></span></div>
@@ -1256,7 +1424,8 @@ function render() {
         `<button data-act="claim" ${S.busy || S.claimable === 0n ? "disabled" : ""}>Claim winnings</button>`,
         cfg.chainId === 31337 ? `<button data-act="fund">Dev: 10 ETH</button>` : "",
         S.smart ? "" : passkeyButtons(false),
-      ].join("")}</div>`;
+        S.smart ? "" : emailButton(),
+      ].join("")}</div>${emailForm()}`;
   }
   html += `</section>`;
 
@@ -1306,9 +1475,13 @@ function render() {
 
   app.innerHTML = html + `<div class="dim mono" id="build" style="margin-top:12px">${S.build ? `site build ${S.build} &middot; check it with: npm run verify:site -- ${esc(location.origin)}` : ""}</div>`;
   if (keep) {
-    const el = document.getElementById("stake") as HTMLInputElement | null;
+    const el = document.getElementById(keep.id) as HTMLInputElement | null;
     el?.focus();
-    el?.setSelectionRange(keep.start, keep.end);
+    try {
+      el?.setSelectionRange(keep.start, keep.end);
+    } catch {
+      /* some input types (email, password) do not take a selection */
+    }
   }
 }
 

@@ -266,6 +266,28 @@ The server only forwards sponsor requests for operations that call the PlayPot c
 
 Tests: `npm run ui-test:passkey` drives the real app with a real (virtual) passkey against a fake bundler and sponsor: it creates a passkey, checks that every operation carries a valid passkey signature over the right hash, that gas is sponsored, that the wallet deploys through the known factory on its first operation, plays a full JINX match from a wallet with no ETH, claims, survives a reload, and signs in again on a "new device" from the directory. `npm run ui-test:smart` checks batching with a fake EIP-5792 wallet. **Not covered:** the wallet contract and a real bundler, which need a live network. Try those by hand on Base Sepolia once `BUNDLER_URL` is set.
 
+## Email sign-in (non-custodial)
+
+For players whose device has no passkey support, or who prefer email: **Sign in with email**. An emailed 6-digit code proves the address; a passphrase the player chooses encrypts their wallet key **in their own browser**; the server keeps only the ciphertext. The wallet is the same smart wallet as the passkey one, sent through the same relay with the same gas sponsoring.
+
+- **First time:** email, code, then choose a passphrase (10+ characters; four random words is good). The key is made in the browser, encrypted (PBKDF2-SHA256, 600,000 rounds, AES-GCM, with the wallet address bound in), and uploaded.
+- **New device:** email, code, then the passphrase. The same wallet address comes back.
+- **Same device later:** "Unlock email wallet" asks only for the passphrase (the encrypted key is kept on the device), no new email. A reload in the same tab does not ask again.
+- **The server can't spend anything.** It stores ciphertext, keyed hashes of addresses (a secret `email-pepper.key` in the data folder, so a leaked file cannot be matched against guessed addresses) and the last 20 versions of each saved key. It never sees the key or the passphrase.
+- **A forgotten passphrase cannot be recovered by anyone,** PlayPot included. That is the price of not holding keys. The sign-up screen says so.
+- **Honest limits:** whoever has both the player's email and a stolen copy of the ciphertext can try passphrases offline, so a weak passphrase is the weak point (the strength rules and the slow key derivation are the defence). The opened key is kept in the tab's session storage so a reload does not ask again; on a shared computer, close the tab.
+
+**It is off until you give the server a Brevo key and a sender, and a bundler** (the wallet needs the relay to send anything):
+
+```powershell
+$env:BREVO_API_KEY = "xkeysib-..."          # Brevo: SMTP & API > API Keys (not the SMTP key)
+$env:EMAIL_FROM = "no-reply@playpot.gg"     # a sender verified in Brevo
+$env:EMAIL_FROM_NAME = "PlayPot.GG"
+$env:BUNDLER_URL = "..."                    # as in the section above
+```
+
+In Brevo, verify the sender and authenticate the `playpot.gg` domain (Brevo gives you DNS records to add in Cloudflare, with the proxy off), or codes may land in spam. Codes are limited to one per 20 seconds and six an hour per address, 20 an hour per internet address, five tries per code. `npm run ui-test:email` runs the whole flow against a captured mailer and checks what the server stored.
+
 ## Known limits of v0
 
 - **Mock referee.** One plain key signs as the referee. Phase 2 moves it into an attested enclave; until then, the referee can only affect settlement by colluding with a player, and the dispute path above overturns that.

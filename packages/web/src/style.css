@@ -89,3 +89,9 @@ button, select, input { touch-action: manipulation; }
   .board { grid-template-columns: repeat(3, 1fr); max-width: 260px; } .cell { width: 100%; height: auto; aspect-ratio: 1; }
   input[type=range] { width: 100% !important; }
 }
+
+/* ---- email sign-in form */
+.emailform { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+.emailform h2 { margin-bottom: 6px; }
+.emailform label { display: block; width: 100%; }
+@media (max-width: 640px) { input.wide { width: 100%; } }

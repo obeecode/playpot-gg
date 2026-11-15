@@ -2,8 +2,8 @@
 // open-source Coinbase Smart Wallet contract with the passkey as its owner, and every transaction is an ERC-4337 operation
 // sent through this site's own /bundler and /paymaster. No third-party sign-in page, so nothing outside app.playpot.gg has
 // to be reachable from the player's network.
-import { createBundlerClient, createPaymasterClient, createWebAuthnCredential, toCoinbaseSmartAccount, toWebAuthnAccount } from "viem/account-abstraction";
-import { http, toHex, type Address, type Hex, type PublicClient } from "viem";
+import { createBundlerClient, createPaymasterClient, createWebAuthnCredential, toCoinbaseSmartAccount, toWebAuthnAccount, type WebAuthnAccount } from "viem/account-abstraction";
+import { http, toHex, type Address, type Hex, type LocalAccount, type PublicClient } from "viem";
 import { WebAuthnP256 } from "ox";
 import type { BatchLog, Eip1193 } from "./wallet.ts";
 
@@ -145,12 +145,21 @@ export interface OpenedWallet {
   address: Address;
 }
 
-/** Builds the smart account for a passkey and a bundler client that sends through this site's relay. */
-export async function openPasskeyWallet(rec: PasskeyRecord, o: { publicClient: PublicClient; serverUrl: string; sponsored: boolean }): Promise<OpenedWallet> {
-  const owner = toWebAuthnAccount({ credential: { id: rec.id, publicKey: rec.publicKey }, rpId: rpIdFor(location.hostname) });
+export interface WalletEnv {
+  publicClient: PublicClient;
+  serverUrl: string;
+  sponsored: boolean;
+}
+
+/** The smart account for a passkey. */
+export const openPasskeyWallet = (rec: PasskeyRecord, o: WalletEnv): Promise<OpenedWallet> =>
+  openSmartWallet(toWebAuthnAccount({ credential: { id: rec.id, publicKey: rec.publicKey }, rpId: rpIdFor(location.hostname) }), o);
+
+/** Builds the smart account for an owner (a passkey, or a key from an email wallet) and a bundler client that sends through this site's relay. */
+export async function openSmartWallet(owner: WebAuthnAccount | LocalAccount, o: WalletEnv): Promise<OpenedWallet> {
   let account;
   try {
-    account = await toCoinbaseSmartAccount({ client: o.publicClient, owners: [owner], version: "1.1" });
+    account = await toCoinbaseSmartAccount({ client: o.publicClient, owners: [owner as never], version: "1.1" });
   } catch (e) {
     throw new Error(`could not work out the wallet address on this network (${(e as Error).message.slice(0, 120)})`);
   }

@@ -6,58 +6,16 @@
 // Usage: (cd contracts && forge build) && node scripts/ui-test-passkey.ts
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright-core";
 import { WebAuthnP256 } from "ox";
-import {
-  createPublicClient,
-  decodeAbiParameters,
-  decodeFunctionData,
-  encodeAbiParameters,
-  hexToString,
-  http,
-  keccak256,
-  pad,
-  parseAbi,
-  type Address,
-  type Hex,
-} from "viem";
-import { entryPoint06Address, getUserOperationHash } from "viem/account-abstraction";
+import { createPublicClient, decodeAbiParameters, hexToString, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { startServer } from "../packages/server/src/main.ts";
 import { deployContracts, deployJinxV2 } from "./lib.ts";
+import { startFakeAa } from "./fakeAa.ts";
 
-const ANVIL_PORT = 18550;
-const RPC = `http://127.0.0.1:${ANVIL_PORT}`;
-const DEPLOYER = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as Hex;
-const REFEREE = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as Hex;
-const FACTORY = "0xba5ed110efdba3d005bfc882d75358acbbb85842";
-const SHOTS = process.env.SHOTS_DIR ?? join(tmpdir(), "playpot-shots");
-mkdirSync(SHOTS, { recursive: true });
-
-const built = spawnSync("npm", ["run", "build:web"], { stdio: "ignore", shell: true });
-if (built.status !== 0) throw new Error("web build failed");
-
-const anvil = spawn(process.env.ANVIL ?? "anvil", ["--port", String(ANVIL_PORT), "--silent", "--base-fee", "0", "--gas-price", "0"], { stdio: "ignore" });
-let code = 0;
-let server: Awaited<ReturnType<typeof startServer>> | undefined;
-let bundlerHttp: ReturnType<typeof createServer> | undefined;
-let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
-
-const rpc = async (method: string, params: unknown[]) => {
-  const res = (await (await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })).json()) as { result?: unknown; error?: { message: string } };
-  if (res.error) throw new Error(`${method}: ${res.error.message}`);
-  return res.result;
-};
-const check = (cond: unknown, what: string) => {
-  if (!cond) throw new Error(`FAILED: ${what}`);
-  console.log(`ok: ${what}`);
-};
-
-const walletAbi = parseAbi(["function execute(address target, uint256 value, bytes data)", "function executeBatch((address target, uint256 value, bytes data)[] calls)"]);
-const sigWrapper = [{ components: [{ name: "ownerIndex", type: "uint256" }, { name: "signatureData", type: "bytes" }], type: "tuple" }] as const;
 const webAuthnAuth = [
   {
     components: [
@@ -71,6 +29,32 @@ const webAuthnAuth = [
     type: "tuple",
   },
 ] as const;
+
+const ANVIL_PORT = 18550;
+const RPC = `http://127.0.0.1:${ANVIL_PORT}`;
+const DEPLOYER = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as Hex;
+const REFEREE = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as Hex;
+const SHOTS = process.env.SHOTS_DIR ?? join(tmpdir(), "playpot-shots");
+mkdirSync(SHOTS, { recursive: true });
+
+const built = spawnSync("npm", ["run", "build:web"], { stdio: "ignore", shell: true });
+if (built.status !== 0) throw new Error("web build failed");
+
+const anvil = spawn(process.env.ANVIL ?? "anvil", ["--port", String(ANVIL_PORT), "--silent", "--base-fee", "0", "--gas-price", "0"], { stdio: "ignore" });
+let code = 0;
+let closeFake: (() => void) | undefined;
+let server: Awaited<ReturnType<typeof startServer>> | undefined;
+let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+
+const rpc = async (method: string, params: unknown[]) => {
+  const res = (await (await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })).json()) as { result?: unknown; error?: { message: string } };
+  if (res.error) throw new Error(`${method}: ${res.error.message}`);
+  return res.result;
+};
+const check = (cond: unknown, what: string) => {
+  if (!cond) throw new Error(`FAILED: ${what}`);
+  console.log(`ok: ${what}`);
+};
 
 try {
   const pub = createPublicClient({ transport: http(RPC) });
@@ -89,105 +73,27 @@ try {
   const { token, escrow } = await deployContracts({ rpc: RPC, deployerPk: DEPLOYER, referee, treasury });
   const jinxEscrow = await deployJinxV2({ rpc: RPC, deployerPk: DEPLOYER, refereePk: REFEREE, treasury, token });
 
-  // ---- a fake bundler + gas sponsor: checks what it is sent, then executes the calls as the wallet (no ETH needed)
-  const state = {
-    ownerKey: "" as Hex, // the passkey's public key, learned from the page after sign-up
-    nonces: new Map<string, bigint>(),
-    deployed: new Set<string>(),
-    ops: [] as Array<{ sender: string; calls: number; withInitCode: boolean; sponsored: boolean; signatureValid: boolean }>,
-    results: new Map<string, unknown>(),
-    paymasterCalls: [] as string[],
-  };
-  const sendOp = async (op: Record<string, Hex>) => {
-    const sender = op.sender.toLowerCase();
-    const userOpHash = getUserOperationHash({
-      chainId,
-      entryPointAddress: entryPoint06Address,
-      entryPointVersion: "0.6",
-      userOperation: {
-        sender: op.sender as Address,
-        nonce: BigInt(op.nonce),
-        initCode: op.initCode,
-        callData: op.callData,
-        callGasLimit: BigInt(op.callGasLimit),
-        verificationGasLimit: BigInt(op.verificationGasLimit),
-        preVerificationGas: BigInt(op.preVerificationGas),
-        maxFeePerGas: BigInt(op.maxFeePerGas),
-        maxPriorityFeePerGas: BigInt(op.maxPriorityFeePerGas),
-        paymasterAndData: op.paymasterAndData,
-        signature: op.signature,
-      },
-    });
-    // The wallet checks the passkey's signature over the operation hash itself. Do the same check.
-    const [{ ownerIndex, signatureData }] = decodeAbiParameters(sigWrapper, op.signature);
-    const [auth] = decodeAbiParameters(webAuthnAuth, signatureData);
-    const challenge = userOpHash;
-    const clientDataJSON = hexToString(auth.clientDataJSON);
-    const signatureValid =
-      ownerIndex === 0n &&
-      WebAuthnP256.verify({
-        challenge,
-        metadata: { authenticatorData: auth.authenticatorData, clientDataJSON, challengeIndex: Number(auth.challengeIndex), typeIndex: Number(auth.typeIndex), userVerificationRequired: true },
-        publicKey: { prefix: 4, x: BigInt(`0x${state.ownerKey.slice(2, 66)}`), y: BigInt(`0x${state.ownerKey.slice(66)}`) },
-        signature: { r: auth.r, s: auth.s },
-      });
-    const d = decodeFunctionData({ abi: walletAbi, data: op.callData });
-    const calls = d.functionName === "execute" ? [{ target: d.args[0], value: d.args[1], data: d.args[2] }] : d.args[0];
-    state.ops.push({ sender, calls: calls.length, withInitCode: op.initCode.length > 2, sponsored: op.paymasterAndData.length > 2, signatureValid });
-    if (!signatureValid) {
-      if (process.env.DEBUG) console.log("[fake bundler] signature check failed", { ownerIndex, challenge, clientDataJSON, flags: auth.authenticatorData.slice(2 + 64, 2 + 66), typeIndex: auth.typeIndex, challengeIndex: auth.challengeIndex, userOpHash });
-      throw new Error("bad passkey signature");
-    }
-
-    await rpc("anvil_impersonateAccount", [op.sender]);
-    const logs: unknown[] = [];
-    let last: unknown;
-    let success = true;
-    for (const c of calls) {
-      const hash = (await rpc("eth_sendTransaction", [{ from: op.sender, to: c.target, data: c.data, value: "0x0", gas: "0x2dc6c0", gasPrice: "0x0" }])) as string;
-      let r: { status: string; logs: unknown[] } | undefined;
-      while (!r) r = ((await rpc("eth_getTransactionReceipt", [hash])) as typeof r | null) ?? undefined;
-      logs.push(...r.logs);
-      last = r;
-      if (r.status !== "0x1") success = false;
-    }
-    state.nonces.set(sender, (state.nonces.get(sender) ?? 0n) + 1n);
-    state.deployed.add(sender);
-    state.results.set(userOpHash, { userOpHash, entryPoint: entryPoint06Address, sender: op.sender, nonce: op.nonce, actualGasCost: "0x0", actualGasUsed: "0x0", success, logs, receipt: last });
-    return userOpHash;
-  };
-  const dummyPaymaster = `0x${"11".repeat(20)}${"00".repeat(64)}` as Hex;
-  bundlerHttp = createServer(async (req, res) => {
-    let body = "";
-    for await (const chunk of req) body += chunk;
-    const call = JSON.parse(body) as { id: number; method: string; params: unknown[] };
-    const reply = (result: unknown) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: call.id, result }));
-    const fail = (code: number, message: string) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: call.id, error: { code, message } }));
-    try {
-      switch (call.method) {
-        case "eth_chainId":
-          return reply(`0x${chainId.toString(16)}`);
-        case "eth_supportedEntryPoints":
-          return reply([entryPoint06Address]);
-        case "eth_estimateUserOperationGas":
-          return reply({ preVerificationGas: "0x10000", verificationGasLimit: "0xf4240", callGasLimit: "0x30d40" });
-        case "pm_getPaymasterStubData":
-        case "pm_getPaymasterData":
-          state.paymasterCalls.push(call.method);
-          return reply({ paymasterAndData: dummyPaymaster });
-        case "eth_sendUserOperation":
-          return reply(await sendOp(call.params[0] as Record<string, Hex>));
-        case "eth_getUserOperationReceipt":
-          return reply(state.results.get(call.params[0] as string) ?? null);
-        default:
-          return fail(-32601, `the fake bundler does not do ${call.method}`); // includes pimlico_getUserOperationGasPrice: the app falls back
-      }
-    } catch (e) {
-      return fail(-32000, (e as Error).message);
-    }
+  // ---- the shared fake bundler + gas sponsor; here it checks the passkey's WebAuthn signature over each operation
+  let ownerKey = "" as Hex; // the passkey's public key, learned from the page after sign-up
+  const fake = await startFakeAa({
+    rpc,
+    chainId,
+    ownerCheck: ({ userOpHash, ownerIndex, signatureData }) => {
+      const [auth] = decodeAbiParameters(webAuthnAuth, signatureData);
+      return (
+        ownerIndex === 0n &&
+        WebAuthnP256.verify({
+          challenge: userOpHash,
+          metadata: { authenticatorData: auth.authenticatorData, clientDataJSON: hexToString(auth.clientDataJSON), challengeIndex: Number(auth.challengeIndex), typeIndex: Number(auth.typeIndex), userVerificationRequired: true },
+          publicKey: { prefix: 4, x: BigInt(`0x${ownerKey.slice(2, 66)}`), y: BigInt(`0x${ownerKey.slice(66)}`) },
+          signature: { r: auth.r, s: auth.s },
+        })
+      );
+    },
   });
-  await new Promise<void>((r) => bundlerHttp!.listen(0, "127.0.0.1", r));
-  const bundlerUrl = `http://127.0.0.1:${(bundlerHttp.address() as { port: number }).port}/`;
+  closeFake = fake.close;
+  const state = fake.state;
+  const bundlerUrl = fake.url;
 
   server = await startServer({
     rpcUrl: RPC,
@@ -231,25 +137,7 @@ try {
     const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
       options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
     });
-    // The wallet factory and EntryPoint are not on a local chain: answer the three reads the app makes about them.
-    await ctx.route("**/rpc", async (route) => {
-      const body = JSON.parse(route.request().postData()!) as { id: number; method: string; params: Array<{ to?: string; data?: string } | string> }[] | { id: number; method: string; params: Array<{ to?: string; data?: string } | string> };
-      const arr = Array.isArray(body) ? body : [body];
-      const out = await Promise.all(
-        arr.map(async (c) => {
-          const tx = c.params?.[0] as { to?: string; data?: string } | undefined;
-          if (c.method === "eth_call" && tx?.to?.toLowerCase() === FACTORY) return { jsonrpc: "2.0", id: c.id, result: pad(`0x${keccak256(tx.data as Hex).slice(-40)}`) }; // a wallet address that depends on the owner key
-          if (c.method === "eth_call" && tx?.to?.toLowerCase() === entryPoint06Address.toLowerCase()) {
-            const sender = `0x${tx.data!.slice(34, 74)}`; // getNonce(sender, key)
-            return { jsonrpc: "2.0", id: c.id, result: pad(`0x${(state.nonces.get(sender) ?? 0n).toString(16)}`, { size: 32 }) };
-          }
-          if (c.method === "eth_getCode" && state.deployed.has(String(c.params[0]).toLowerCase())) return { jsonrpc: "2.0", id: c.id, result: "0x60" };
-          const r = await fetch(`${webUrl}/rpc`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
-          return r.json();
-        }),
-      );
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(Array.isArray(body) ? out : out[0]) });
-    });
+    await fake.stubChainReads(ctx, webUrl);
     return { ctx, page, cdp, authenticatorId };
   };
 
@@ -263,7 +151,7 @@ try {
   await waitText(alice, "#addr", /passkey wallet/);
   const addrA = ((await alice.textContent("#addr")) ?? "").match(/0x[0-9a-fA-F]{40}/)![0];
   const rec = JSON.parse((await alice.evaluate(() => localStorage.getItem("playpot:passkey"))) as string) as { id: string; publicKey: Hex };
-  state.ownerKey = rec.publicKey;
+  ownerKey = rec.publicKey;
   check(rec.publicKey.length === 130, "a passkey was created on the page, with a P-256 public key");
   const dir = await fetch(`${webUrl}/passkey/${encodeURIComponent(rec.id)}`);
   check(dir.ok && ((await dir.json()) as { publicKey: string }).publicKey === rec.publicKey.toLowerCase(), "its public key is in the server's directory");
@@ -358,7 +246,7 @@ try {
 } finally {
   await browser?.close();
   await server?.close();
-  bundlerHttp?.close();
+  closeFake?.();
   anvil.kill();
   process.exit(code);
 }

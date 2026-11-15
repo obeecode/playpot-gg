@@ -44,6 +44,9 @@ if (existing) {
     bundlerUrl: process.env.BUNDLER_URL, // switches passkey wallets on
     paymasterUrl: process.env.PAYMASTER_URL, // also pays players' gas
     paymasterContext: process.env.PAYMASTER_CONTEXT ? JSON.parse(process.env.PAYMASTER_CONTEXT) : undefined,
+    brevoApiKey: process.env.BREVO_API_KEY, // with EMAIL_FROM, switches on email sign-in
+    emailFrom: process.env.EMAIL_FROM,
+    emailFromName: process.env.EMAIL_FROM_NAME,
   });
   console.log(`\nReferee ${server.referee} serving ${process.env.ESCROW} via ${rpc}`);
 } else {

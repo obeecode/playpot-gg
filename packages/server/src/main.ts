@@ -12,6 +12,7 @@ import { Room } from "./room.ts";
 import { JinxHost } from "./jinxHost.ts";
 import { createAa } from "./aa.ts";
 import { PasskeyRegistry } from "./passkeys.ts";
+import { EmailAuth, brevoMailer, type Mailer } from "./email.ts";
 import type { JinxRoomOptions } from "./jinxRoom.ts";
 
 export interface ServerConfig {
@@ -30,6 +31,10 @@ export interface ServerConfig {
   bundlerUrl?: string; // enables passkey wallets: the ERC-4337 bundler endpoint the server relays to (keep the API key here, not in the browser)
   paymasterUrl?: string; // also sponsors gas, so passkey players need no ETH; for providers that serve both, the same URL as the bundler
   paymasterContext?: unknown; // for example { sponsorshipPolicyId: "sp_..." }, added by the server to every sponsor request
+  brevoApiKey?: string; // with emailFrom, switches on email sign-in (codes are sent through Brevo)
+  emailFrom?: string; // a sender address verified in Brevo, for example no-reply@playpot.gg
+  emailFromName?: string;
+  mailer?: Mailer; // tests inject one
   proxyRpc?: boolean; // expose a restricted /rpc proxy so browsers need no direct chain access (local chains)
 }
 
@@ -94,6 +99,9 @@ export async function startServer(cfg: ServerConfig) {
   });
   const passkeys = new PasskeyRegistry(cfg.dataDir);
   const registrations = new Map<string, number>();
+  const mailer = cfg.mailer ?? (cfg.brevoApiKey && cfg.emailFrom ? brevoMailer({ apiKey: cfg.brevoApiKey, fromEmail: cfg.emailFrom, fromName: cfg.emailFromName }) : undefined);
+  const email = mailer ? new EmailAuth({ dataDir: cfg.dataDir, mailer }) : undefined;
+  const bearer = (req: IncomingMessage) => /^Bearer ([0-9a-f]{64})$/.exec(String(req.headers.authorization ?? ""))?.[1];
   const clientIp = (req: IncomingMessage) => String(req.headers["cf-connecting-ip"] ?? String(req.headers["x-forwarded-for"] ?? "").split(",")[0] ?? "").trim() || (req.socket.remoteAddress ?? "?");
 
   const rooms = new Map<string, Room>();
@@ -283,7 +291,36 @@ export async function startServer(cfg: ServerConfig) {
           rpcUrl,
           jinx: jinxChain ? { escrow: jinxChain.escrow, token: jinxToken, limits: await jinxLimits() } : undefined,
           aa: { enabled: aa.enabled, sponsored: aa.sponsored },
+          email: { enabled: !!email },
         });
+      }
+      if (url.pathname.startsWith("/email/") || url.pathname === "/vault") {
+        if (!email) return json(404, { error: "email sign-in is not switched on" });
+        if (url.pathname === "/email/start" && req.method === "POST") {
+          const body = JSON.parse(await readBody(req)) as { email?: unknown };
+          const r = await email.start(body.email, clientIp(req));
+          if (r === "sent") return json(200, { ok: true });
+          if (r === "invalid") return json(400, { error: "that does not look like an email address" });
+          if (r === "limited") return json(429, { error: "too many codes requested, try again in a little while" });
+          return json(502, { error: "the code could not be sent, try again" });
+        }
+        if (url.pathname === "/email/verify" && req.method === "POST") {
+          const body = JSON.parse(await readBody(req)) as { email?: unknown; code?: unknown };
+          const r = email.verify(body.email, body.code);
+          if (r.ok) return json(200, { token: r.token, hasVault: r.hasVault });
+          return json(r.reason === "locked" ? 429 : 401, { error: r.reason === "locked" ? "too many wrong codes, ask for a new one" : "that code is wrong or has expired" });
+        }
+        if (url.pathname === "/vault" && req.method === "GET") {
+          const v = email.vaultFor(bearer(req));
+          if (v === "unauthorized") return json(401, { error: "sign in again with a new code" });
+          return v ? json(200, v) : json(404, { error: "no wallet for this email yet" });
+        }
+        if (url.pathname === "/vault" && req.method === "PUT") {
+          const body = JSON.parse(await readBody(req)) as { blob?: unknown };
+          const r = email.putVault(bearer(req), body.blob);
+          if (r === "ok") return json(200, { ok: true });
+          return json(r === "unauthorized" ? 401 : r === "full" ? 409 : 400, { error: r === "unauthorized" ? "sign in again with a new code" : r === "full" ? "too many saved versions" : "bad wallet data" });
+        }
       }
       if ((url.pathname === "/bundler" || url.pathname === "/paymaster") && req.method === "POST") {
         const out = await (url.pathname === "/bundler" ? aa.bundler : aa.paymaster)(await readBody(req), clientIp(req));
