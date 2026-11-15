@@ -183,3 +183,25 @@ test("the directory survives a restart and skips damaged lines", () => {
   assert.equal(again.get(ID), KEY);
   assert.equal(again.size, 1);
 });
+
+test("when the provider answers with an HTTP error, the browser gets that message (with the API key removed)", async () => {
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (m: unknown) => void warned.push(String(m));
+  try {
+    const aa = createAa({
+      bundlerUrl: "https://bundler.example/v2/84532/rpc?apikey=SECRET123",
+      allowedTargets: ALLOWED,
+      fetchFn: (async () => new Response('{"message":"invalid apikey=SECRET123 for this network"}', { status: 401 })) as unknown as typeof fetch,
+    });
+    const r = await aa.bundler(rpc("eth_estimateUserOperationGas", [{}, "0xep"]), "8.8.8.8");
+    assert.equal(r.status, 200, "a JSON-RPC error the browser can read, not a bare failed request");
+    const msg = JSON.parse(r.body).error.message as string;
+    assert.match(msg, /answered 401/);
+    assert.equal(msg.includes("SECRET123"), false);
+    assert.equal(warned.join("\n").includes("SECRET123"), false, "the key is not in the server log either");
+    assert.match(warned.join("\n"), /eth_estimateUserOperationGas answered 401/);
+  } finally {
+    console.warn = realWarn;
+  }
+});

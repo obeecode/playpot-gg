@@ -262,7 +262,10 @@ async function run(label: string, fn: () => Promise<void>) {
     ok = true;
     S.msg = `${label}: done`;
   } catch (e) {
-    S.msg = `${label} failed: ${((e as { shortMessage?: string }).shortMessage ?? (e as Error).message).slice(0, 240)}`;
+    // viem keeps the useful part (what the bundler or the wallet actually said) in `details`
+    const err = e as { shortMessage?: string; details?: string; message: string };
+    const said = [err.shortMessage ?? err.message, err.details && !(err.shortMessage ?? "").includes(err.details) ? err.details : ""].filter(Boolean).join(" ");
+    S.msg = `${label} failed: ${said.slice(0, 420)}`;
   }
   S.busy = false;
   if (ok) await refreshAfterChange();

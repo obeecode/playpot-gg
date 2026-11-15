@@ -116,12 +116,31 @@ export function createAa(o: AaOptions) {
   const bySender = new RateLimiter(o.sponsoredPerSenderPerHour ?? 120, 3_600_000, now);
   const byIp = new RateLimiter(o.callsPerIpPerHour ?? 3_000, 3_600_000, now);
 
+  /** Provider URLs carry API keys: never let one reach a log or an error message. */
+  const redact = (t: string) => t.replace(/(api[-_]?key|apikey|key|token)=[^&\s"']+/gi, "$1=…");
+
   async function forward(url: string, call: RpcCall): Promise<RelayResult> {
     try {
       const res = await fetchFn(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(call), signal: AbortSignal.timeout(30_000) });
-      return { status: res.status, body: await res.text() };
+      const text = await res.text();
+      if (!res.ok) {
+        // Say what the provider said, in a form the browser can show, instead of a bare "HTTP request failed".
+        const detail = redact(text.slice(0, 200));
+        console.warn(`relay: ${String(call.method)} answered ${res.status}: ${detail}`);
+        return rpcError(call.id, -32000, `the bundler service answered ${res.status}: ${detail}`);
+      }
+      if (text.includes('"error"')) {
+        try {
+          const msg = (JSON.parse(text) as { error?: { message?: string } }).error?.message;
+          if (msg) console.warn(`relay: ${String(call.method)} was refused: ${redact(msg.slice(0, 200))}`);
+        } catch {
+          /* not JSON: pass it on as it is */
+        }
+      }
+      return { status: res.status, body: text };
     } catch (e) {
-      return rpcError(call.id, -32000, `relay upstream failed: ${(e as Error).message.slice(0, 120)}`);
+      console.warn(`relay: ${String(call.method)} failed: ${redact((e as Error).message.slice(0, 160))}`);
+      return rpcError(call.id, -32000, `relay upstream failed: ${redact((e as Error).message.slice(0, 120))}`);
     }
   }
 
