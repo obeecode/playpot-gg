@@ -1,4 +1,4 @@
-// Smart-wallet plumbing: batched calls (EIP-5792) with an optional gas sponsor (a paymaster), and the SDK hookup.
+// Smart-wallet plumbing: batched calls (EIP-5792) with an optional gas sponsor (a paymaster).
 // Kept free of DOM and app state so it can be tested with a fake provider.
 import { encodeFunctionData, toHex, type Abi, type Address, type Hex } from "viem";
 
@@ -47,7 +47,7 @@ interface RawReceipt {
 }
 
 export interface BatchOptions {
-  paymasterUrl?: string; // a gas sponsor: the wallet asks it to pay, so the player needs no ETH
+  paymasterUrl?: string; // tells the wallet a gas sponsor is available, so the player needs no ETH
   pollMs?: number;
   timeoutMs?: number;
 }
@@ -84,18 +84,4 @@ export async function sendBatch(provider: Eip1193, from: Address, chainId: numbe
     if (Date.now() > deadline) throw new Error("timed out waiting for the batch to confirm");
     await sleep(pollMs);
   }
-}
-
-/** The Coinbase Smart Wallet provider (passkey or email sign-in; a smart account on Base). Loaded on demand. */
-export async function coinbaseSmartProvider(chainId: number): Promise<Eip1193> {
-  const injected = (window as unknown as { __playpotSmartProvider?: Eip1193 }).__playpotSmartProvider;
-  if (injected) return injected; // a fake wallet for automated tests
-  const { createCoinbaseWalletSDK } = await import("@coinbase/wallet-sdk");
-  const sdk = createCoinbaseWalletSDK({
-    appName: "PlayPot.GG",
-    appLogoUrl: null,
-    appChainIds: [chainId],
-    preference: { options: "smartWalletOnly" },
-  });
-  return sdk.getProvider() as unknown as Eip1193;
 }

@@ -10,6 +10,8 @@ import { Chain } from "./chain.ts";
 import { Snapshots } from "./state.ts";
 import { Room } from "./room.ts";
 import { JinxHost } from "./jinxHost.ts";
+import { createAa } from "./aa.ts";
+import { PasskeyRegistry } from "./passkeys.ts";
 import type { JinxRoomOptions } from "./jinxRoom.ts";
 
 export interface ServerConfig {
@@ -25,7 +27,9 @@ export interface ServerConfig {
   jinxRoom?: JinxRoomOptions;
   clock?: () => number; // tests inject a fake clock
   webDir?: string; // serve the built web client from this folder
-  paymasterUrl?: string; // an ERC-7677 gas sponsor (for example Coinbase's): passkey wallets send it with each batch so players need no ETH
+  bundlerUrl?: string; // enables passkey wallets: the ERC-4337 bundler endpoint the server relays to (keep the API key here, not in the browser)
+  paymasterUrl?: string; // also sponsors gas, so passkey players need no ETH; for providers that serve both, the same URL as the bundler
+  paymasterContext?: unknown; // for example { sponsorshipPolicyId: "sp_..." }, added by the server to every sponsor request
   proxyRpc?: boolean; // expose a restricted /rpc proxy so browsers need no direct chain access (local chains)
 }
 
@@ -80,6 +84,17 @@ export async function startServer(cfg: ServerConfig) {
       console.warn(`WARNING: the referee ${referee.address} has posted ${lim.refereeBond} collateral, below the ${lim.refereeBondFloor} floor. No JINX match can start until it calls depositRefereeBond.`);
     }
   });
+
+  // Passkey wallets: relay to the bundler and gas sponsor, and keep the public key directory.
+  const aa = createAa({
+    bundlerUrl: cfg.bundlerUrl,
+    paymasterUrl: cfg.paymasterUrl,
+    paymasterContext: cfg.paymasterContext,
+    allowedTargets: [cfg.escrow, tokenAddr, ...(jinxChain ? [jinxChain.escrow, jinxToken!] : [])],
+  });
+  const passkeys = new PasskeyRegistry(cfg.dataDir);
+  const registrations = new Map<string, number>();
+  const clientIp = (req: IncomingMessage) => String(req.headers["cf-connecting-ip"] ?? String(req.headers["x-forwarded-for"] ?? "").split(",")[0] ?? "").trim() || (req.socket.remoteAddress ?? "?");
 
   const rooms = new Map<string, Room>();
   const subs = new Map<string, Set<WebSocket>>();
@@ -267,8 +282,30 @@ export async function startServer(cfg: ServerConfig) {
           referee: referee.address,
           rpcUrl,
           jinx: jinxChain ? { escrow: jinxChain.escrow, token: jinxToken, limits: await jinxLimits() } : undefined,
-          paymasterUrl: cfg.paymasterUrl,
+          aa: { enabled: aa.enabled, sponsored: aa.sponsored },
         });
+      }
+      if ((url.pathname === "/bundler" || url.pathname === "/paymaster") && req.method === "POST") {
+        const out = await (url.pathname === "/bundler" ? aa.bundler : aa.paymaster)(await readBody(req), clientIp(req));
+        res.writeHead(out.status, { "content-type": "application/json" });
+        return void res.end(out.body);
+      }
+      if (url.pathname === "/passkey" && req.method === "POST") {
+        const ip = clientIp(req);
+        const n = (registrations.get(ip) ?? 0) + 1;
+        registrations.set(ip, n);
+        if (registrations.size > 20_000) registrations.clear();
+        if (n > 60) return json(429, { error: "too many registrations from this address" });
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; publicKey?: unknown };
+        const result = passkeys.register(body.id, body.publicKey);
+        if (result === "invalid") return json(400, { error: "bad passkey" });
+        if (result === "conflict") return json(409, { error: "that passkey id is already registered with a different key" });
+        if (result === "full") return json(507, { error: "directory full" });
+        return json(200, { ok: true, existed: result === "same" });
+      }
+      if (url.pathname.startsWith("/passkey/") && req.method === "GET") {
+        const key = passkeys.get(decodeURIComponent(url.pathname.slice("/passkey/".length)));
+        return key ? json(200, { publicKey: key }) : json(404, { error: "unknown passkey" });
       }
       if (url.pathname === "/rpc" && cfg.proxyRpc && req.method === "POST") {
         const body = JSON.parse(await readBody(req));

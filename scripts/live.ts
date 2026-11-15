@@ -41,7 +41,9 @@ if (existing) {
     dataDir: process.env.DATA_DIR ?? "data",
     resultWaitMs: Number(process.env.RESULT_WAIT_MS ?? 15000),
     webDir: "packages/web/dist",
-    paymasterUrl: process.env.PAYMASTER_URL,
+    bundlerUrl: process.env.BUNDLER_URL, // switches passkey wallets on
+    paymasterUrl: process.env.PAYMASTER_URL, // also pays players' gas
+    paymasterContext: process.env.PAYMASTER_CONTEXT ? JSON.parse(process.env.PAYMASTER_CONTEXT) : undefined,
   });
   console.log(`\nReferee ${server.referee} serving ${process.env.ESCROW} via ${rpc}`);
 } else {

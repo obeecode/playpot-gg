@@ -78,3 +78,68 @@ test("a wallet that never confirms times out, and a refusal is passed on", async
   const refuses: Eip1193 = { request: async () => Promise.reject(new Error("User rejected the request")) };
   await assert.rejects(sendBatch(refuses, ME, 84532, [call(TOKEN, abi, "approve", [ME, 1n])]), /rejected/);
 });
+
+// ------------------------------------------------------------------------------------------- the passkey wallet adapter
+
+import { rpIdFor, smartProvider, type BundlerLike } from "./passkey.ts";
+
+class NotFound extends Error {
+  override name = "UserOperationReceiptNotFoundError";
+}
+
+function fakeBundler(opts: { pending?: number; success?: boolean } = {}) {
+  const sentOps: Array<{ calls: Array<{ to: Address; data: string; value: bigint }> }> = [];
+  let polls = 0;
+  const bundler: BundlerLike = {
+    async sendUserOperation(args) {
+      sentOps.push(args);
+      return "0x1234";
+    },
+    async getUserOperationReceipt() {
+      if (++polls <= (opts.pending ?? 0)) throw new NotFound("User Operation receipt with hash could not be found");
+      return { success: opts.success ?? true, logs: [{ address: TOKEN, topics: ["0xaa"], data: "0x" }], receipt: { transactionHash: "0x99" } };
+    },
+  };
+  return { bundler, sentOps };
+}
+
+test("a passkey wallet answers the account questions the app asks", async () => {
+  const p = smartProvider(ME, fakeBundler().bundler);
+  assert.deepEqual(await p.request({ method: "eth_requestAccounts" }), [ME]);
+  assert.deepEqual(await p.request({ method: "eth_accounts" }), [ME]);
+  assert.equal(await p.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x14a34" }] }), null);
+  await assert.rejects(p.request({ method: "eth_sendTransaction", params: [{}] }), /does not do/);
+});
+
+test("a batch becomes one user operation, and its receipt reads back as a confirmed batch", async () => {
+  const { bundler, sentOps } = fakeBundler({ pending: 2 });
+  const res = await sendBatch(smartProvider(ME, bundler), ME, 84532, [call(TOKEN, abi, "approve", [ME, 5n]), call(TOKEN, abi, "approve", [ME, 6n])], { pollMs: 1 });
+  assert.equal(sentOps.length, 1, "one operation, one passkey prompt");
+  assert.equal(sentOps[0].calls.length, 2);
+  assert.equal(sentOps[0].calls[0].to, TOKEN);
+  assert.equal(sentOps[0].calls[0].value, 0n);
+  assert.equal(res.id, "0x1234");
+  assert.deepEqual(res.txHashes, ["0x99"]);
+  assert.equal(res.logs.length, 1);
+});
+
+test("a user operation that reverts is reported as a failed batch", async () => {
+  const { bundler } = fakeBundler({ success: false });
+  await assert.rejects(sendBatch(smartProvider(ME, bundler), ME, 84532, [call(TOKEN, abi, "approve", [ME, 1n])], { pollMs: 1 }), /failed/);
+});
+
+test("other bundler errors are not mistaken for 'still pending'", async () => {
+  const bundler: BundlerLike = {
+    sendUserOperation: async () => "0x1",
+    getUserOperationReceipt: async () => Promise.reject(new Error("the bundler is down")),
+  };
+  await assert.rejects(sendBatch(smartProvider(ME, bundler), ME, 84532, [call(TOKEN, abi, "approve", [ME, 1n])], { pollMs: 1 }), /bundler is down/);
+});
+
+test("passkeys are tied to playpot.gg for every subdomain, and to the host elsewhere", () => {
+  assert.equal(rpIdFor("app.playpot.gg"), "playpot.gg");
+  assert.equal(rpIdFor("playpot.gg"), "playpot.gg");
+  assert.equal(rpIdFor("www.playpot.gg"), "playpot.gg");
+  assert.equal(rpIdFor("localhost"), "localhost");
+  assert.equal(rpIdFor("evilplaypot.gg"), "evilplaypot.gg", "a look-alike domain does not share the passkey");
+});

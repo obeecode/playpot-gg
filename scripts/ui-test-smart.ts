@@ -1,7 +1,6 @@
-// Drives the real web client with a fake smart (passkey) wallet: the player holds NO ETH, every action is one batched
+// Drives the real web client with a fake smart wallet that speaks EIP-5792 (it stands in for any batching wallet): the player holds NO ETH, every action is one batched
 // call (approve + offer in a single confirmation) with a gas sponsor attached, and a full JINX match is played and paid.
-// The fake wallet stands in for the Coinbase Smart Wallet popup (which needs a real browser and passkey); it speaks the
-// same EIP-5792 methods the real one does. Usage: (cd contracts && forge build) && node scripts/ui-test-smart.ts
+// The real passkey wallet is covered by ui-test-passkey.ts; this one isolates the batching and sponsorship behaviour. Usage: (cd contracts && forge build) && node scripts/ui-test-smart.ts
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,6 +63,7 @@ try {
     resultWaitMs: 4000,
     webDir: "packages/web/dist",
     proxyRpc: true,
+    bundlerUrl: "https://bundler.test/rpc", // these two only switch sponsoring on: the fake wallet never calls them
     paymasterUrl: SPONSOR,
     jinxRoom: { startDelayMs: 400, turnGapMs: 300, gameGapMs: 500, revealMs: 4000 },
   });
@@ -121,8 +121,8 @@ try {
 
   // ---- alice signs in with the (fake) passkey wallet
   const alice = await openAlice();
-  await alice.waitForSelector("#smart");
-  await alice.click("#smart");
+  await alice.waitForSelector("#pkcreate");
+  await alice.click("#pkcreate");
   await waitText(alice, "#addr", new RegExp(`${SMART}.*passkey wallet`, "i"));
   check(true, "alice signs in with a passkey wallet and sees its address");
   await alice.click('[data-act="game"][data-game="jinx"]');
@@ -135,7 +135,7 @@ try {
   await msgDone(alice, "Mint 1000 test tokens");
   await waitText(alice, "#tokens", /^1000/);
   check(sentBatches.length === 1 && sentBatches[0].calls.length === 1, "minting is one batched call");
-  check(sentBatches.every((b) => b.capabilities?.paymasterService?.url === SPONSOR), "the gas sponsor is attached to every batch");
+  check(sentBatches.every((b) => b.capabilities?.paymasterService?.url === `${webUrl}/paymaster`), "every batch says gas is sponsored, through this site's own relay");
 
   // ---- create an offer: approve + createOffer in ONE confirmation
   await alice.fill("#stake", "10");

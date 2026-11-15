@@ -1,6 +1,6 @@
 # PlayPot.GG: wallets and payments
 
-Status: the sign-in and sponsored-gas part is built (passkey wallets via Coinbase Smart Wallet, batched calls, optional gas sponsor; see the README). On-ramps, USDC and mainnet are not. Legal review is parked (see "Open questions").
+Status: passkey sign-in with sponsored gas is built and self-hosted (passkeys on our own page, the Coinbase Smart Wallet contract, our own relay to a bundler and sponsor; see the README). On-ramps, USDC and mainnet are not built. Legal review is parked (see "Open questions").
 
 ## The decision
 

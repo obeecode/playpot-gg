@@ -53,7 +53,8 @@ import {
 } from "@playpot/game";
 import { cellName, clockRemaining, describeTiers, describeTurn, money, pct, rakeBpsFor, replayJinx, RING, type Limits } from "./jinxUi.ts";
 import { Practice } from "./practice.ts";
-import { call, coinbaseSmartProvider, sendBatch, type Call, type Eip1193 } from "./wallet.ts";
+import { call, sendBatch, type Call, type Eip1193 } from "./wallet.ts";
+import { createPasskey, openPasskeyWallet, savedPasskey, signInWithPasskey } from "./passkey.ts";
 
 // ------------------------------------------------------------------------------- types & state
 
@@ -64,7 +65,7 @@ interface Config {
   referee: Address;
   rpcUrl: string;
   jinx?: { escrow: Address; token: Address; limits?: Limits };
-  paymasterUrl?: string; // a gas sponsor for smart wallets, when the operator has set one up
+  aa?: { enabled: boolean; sponsored: boolean }; // passkey wallets: available on this server, and whether gas is paid for players
 }
 interface Offer {
   bestOf?: number;
@@ -174,7 +175,7 @@ type Receipt = { logs: Array<{ address: Address; topics: Hex[]; data: Hex }> };
 
 /** A smart wallet sends everything as one batched call (one confirmation), with gas sponsored when a sponsor is set. */
 async function batch(calls: Call[]): Promise<Receipt> {
-  const r = await sendBatch(S.smart!, S.addr!, S.cfg!.chainId, calls, { paymasterUrl: S.cfg!.paymasterUrl });
+  const r = await sendBatch(S.smart!, S.addr!, S.cfg!.chainId, calls, { paymasterUrl: S.cfg!.aa?.sponsored ? `${S.serverUrl}/paymaster` : undefined });
   return { logs: r.logs };
 }
 
@@ -269,7 +270,7 @@ async function init() {
     let restored = false;
     if (localStorage.getItem("playpot:wallet") === "smart" && !params.has("burner")) {
       try {
-        await connectSmart(true); // the wallet remembers the session: no popup if it is still signed in
+        await connectPasskey("restore"); // the passkey is remembered on this device: no prompt until the first action
         restored = true;
       } catch {
         S.smart = null;
@@ -294,22 +295,30 @@ async function init() {
   });
 }
 
-/** Signs in with a passkey or email (a smart wallet on Base). The player needs no extension and no seed phrase. */
-async function connectSmart(silent = false) {
-  if (!S.cfg || !S.chain) return;
-  const provider = await coinbaseSmartProvider(S.cfg.chainId);
-  const accounts = (await provider.request({ method: silent ? "eth_accounts" : "eth_requestAccounts" })) as Address[];
-  if (!accounts?.length) throw new Error("no account");
-  try {
-    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: toHex(S.cfg.chainId) }] });
-  } catch {
-    /* the wallet is already on this chain, or switches itself */
+type PasskeyMode = "create" | "signin" | "restore";
+
+/** A passkey wallet: made on this page with the browser's own passkeys, sent through this site's own relay. */
+async function connectPasskey(mode: PasskeyMode) {
+  if (!S.cfg || !S.chain || !S.pub) return;
+  const injected = (window as unknown as { __playpotSmartProvider?: Eip1193 }).__playpotSmartProvider; // a fake wallet for automated tests
+  let provider: Eip1193;
+  let address: Address;
+  if (injected) {
+    provider = injected;
+    address = ((await provider.request({ method: "eth_requestAccounts" })) as Address[])[0];
+  } else {
+    if (!S.cfg.aa?.enabled) throw new Error("passkey wallets are not switched on for this server");
+    let rec = mode === "restore" ? savedPasskey() : null;
+    if (mode === "restore" && !rec) throw new Error("no saved passkey");
+    if (mode === "create") rec = await createPasskey(S.serverUrl);
+    if (mode === "signin") rec = await signInWithPasskey(S.serverUrl);
+    ({ provider, address } = await openPasskeyWallet(rec!, { publicClient: S.pub, serverUrl: S.serverUrl, sponsored: !!S.cfg.aa.sponsored }));
   }
   S.smart = provider;
   S.burner = false;
-  S.addr = accounts[0];
-  S.acct = accounts[0];
-  S.wallet = createWalletClient({ account: accounts[0], chain: S.chain, transport: custom(provider as never) });
+  S.addr = address;
+  S.acct = address;
+  S.wallet = createWalletClient({ account: address, chain: S.chain, transport: custom(provider as never) });
   S.needAcct = true;
   localStorage.setItem("playpot:wallet", "smart");
 }
@@ -399,7 +408,8 @@ async function refresh() {
 
 const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
   connect: () => run("Connect wallet", () => connect(false)),
-  smart: () => run("Sign in", () => connectSmart()),
+  pkcreate: () => run("Create passkey wallet", () => connectPasskey("create")),
+  pksign: () => run("Sign in", () => connectPasskey("signin")),
   burner: () => run("Use burner wallet", () => connect(true)),
   mint: () =>
     run("Mint 1000 test tokens", async () => {
@@ -1177,10 +1187,18 @@ function limitsHint(): string {
     <span title="The rate depends on the size of the pot">Rake: ${esc(describeTiers(lim.tiers))}.</span></div>${warn}`;
 }
 
+/** The passkey sign-in buttons, shown when this server can relay passkey wallets (or a test wallet is injected). */
+function passkeyButtons(primary: boolean): string {
+  const injected = !!(window as unknown as { __playpotSmartProvider?: unknown }).__playpotSmartProvider;
+  if (!S.cfg?.aa?.enabled && !injected) return "";
+  const dis = S.busy ? "disabled" : "";
+  return `<button class="${primary ? "primary" : ""}" data-act="pkcreate" id="pkcreate" ${dis}>Create passkey wallet</button><button data-act="pksign" id="pksign" ${dis}>Sign in with passkey</button>`;
+}
+
 /** A short checklist for a first-time player, shown until the wallet has gas and test tokens. */
 function getStarted(cfg: Config): string {
   const hasWallet = !!S.addr;
-  const sponsored = !!S.smart && !!cfg.paymasterUrl; // the operator pays the gas for passkey wallets
+  const sponsored = !!S.smart && !!cfg.aa?.sponsored; // the operator pays the gas for passkey wallets
   const hasGas = S.eth > 0n || sponsored;
   const hasTokens = S.tokens > 0n;
   if (hasWallet && hasGas && hasTokens) return "";
@@ -1191,7 +1209,7 @@ function getStarted(cfg: Config): string {
       : "Your wallet needs a little ETH for gas.";
   return `<section id="start"><h2>Get started</h2>
     <ol class="steps">
-      <li>${mark(hasWallet)} <b>Sign in.</b> Use a passkey or email (nothing to install), or MetaMask, or the burner wallet that lives in this browser.</li>
+      <li>${mark(hasWallet)} <b>Sign in.</b> Use a passkey (nothing to install; your fingerprint, face or device PIN), or MetaMask, or the burner wallet that lives in this browser.</li>
       <li>${mark(hasGas)} <b>Gas.</b> ${sponsored ? "Covered for you: passkey wallets pay no gas here." : faucet}</li>
       <li>${mark(hasTokens)} <b>Mint test tokens.</b> They have no value. Press &ldquo;Mint 1000 test tokens&rdquo; in the Wallet box.</li>
       <li class="dim">Then create an offer, or challenge someone. Want to learn JINX first? Try the practice game: it needs no wallet.</li>
@@ -1227,7 +1245,7 @@ function render() {
   }
   html += `<section><h2>Wallet</h2>`;
   if (!S.addr) {
-    html += `<div class="row"><button class="primary" data-act="smart" id="smart">Sign in with passkey or email</button>${window.ethereum ? '<button data-act="connect">Connect MetaMask</button>' : ""}<button data-act="burner">Use burner wallet</button></div>`;
+    html += `<div class="row">${passkeyButtons(true)}${window.ethereum ? '<button data-act="connect">Connect MetaMask</button>' : ""}<button data-act="burner">Use burner wallet</button></div>`;
   } else {
     html += `<div class="row mono" id="addr">${S.addr}${S.burner ? ' <span class="dim">(burner)</span>' : S.smart ? ' <span class="dim">(passkey wallet)</span>' : ""}</div>
       <div class="row"><span>ETH <b id="eth">${Number(formatEther(S.eth)).toFixed(4)}</b></span>
@@ -1237,7 +1255,7 @@ function render() {
         `<button data-act="mint" ${S.busy ? "disabled" : ""}>Mint 1000 test tokens</button>`,
         `<button data-act="claim" ${S.busy || S.claimable === 0n ? "disabled" : ""}>Claim winnings</button>`,
         cfg.chainId === 31337 ? `<button data-act="fund">Dev: 10 ETH</button>` : "",
-        S.smart ? "" : `<button data-act="smart" id="smart">Use a passkey wallet instead</button>`,
+        S.smart ? "" : passkeyButtons(false),
       ].join("")}</div>`;
   }
   html += `</section>`;

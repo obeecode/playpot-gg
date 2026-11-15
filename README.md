@@ -238,19 +238,33 @@ Then run the game with `$env:JINX_ESCROW = $J` (the server reads the limits and 
 
 Tests: `forge test --match-contract JinxEscrowV2Test` (51 tests, including fuzzing of the rake rules and of pot accounting), and `npm run e2e:jinx:v2` plays every scenario, including the false-miss slash, with real signatures from the TypeScript client. Tic-tac-toe stays on its v0 contract; new games (chess) will start from the v2 money rules.
 
-## Passkey wallets and gas sponsoring
+## Passkey wallets (self-hosted) and gas sponsoring
 
-The wallet box has **Sign in with passkey or email**: it creates a Coinbase Smart Wallet on Base (nothing to install, no seed phrase). MetaMask and the burner wallet still work. Everything a passkey player does is sent as one batched call (EIP-5792 `wallet_sendCalls`), so creating an offer or accepting a challenge is **one confirmation** instead of approve-then-act. The wallet remembers the session, so a reload signs back in without a popup. The smart wallet is a contract account: stakes are pulled from it and winnings are claimed to it like any other address, so the escrow contracts needed no change.
+Players can sign in with a **passkey** (fingerprint, face or device PIN): **Create passkey wallet** the first time, **Sign in with passkey** after that or on another device. There is no third-party sign-in page and no seed phrase. MetaMask and the burner wallet still work.
 
-**Gas sponsoring is optional and off by default.** Without it, a passkey wallet needs a little ETH like any other wallet (the checklist and the "Copy my address" button explain this). With it, players need no ETH at all. Set `PAYMASTER_URL` to an ERC-7677 paymaster endpoint before `npm run live`:
+How it works, and why it suits places where outside services are blocked:
+- The passkey is made and used on the page itself (the browser's WebAuthn). The wallet is the open-source Coinbase Smart Wallet contract, already deployed on Base, with the passkey as its owner. Each action is an ERC-4337 operation, so approving tokens and creating an offer or accepting a challenge is **one passkey prompt**.
+- The browser talks only to this site. The server relays to a **bundler** (and an optional **gas sponsor**) that you choose, so a provider being blocked where the player lives does not matter, and the provider's API key never reaches the browser.
+- The server keeps a public directory of passkey public keys (`data/passkeys.jsonl`: write-once, public data) so that a passkey synced to a new device finds its wallet again. The browser checks a fresh signature against the key it gets back.
+- The passkey is tied to `playpot.gg` and all its subdomains. A different domain would not see existing passkeys.
+
+**It is off until you give the server a bundler.** Any ERC-4337 bundler for EntryPoint 0.6 on your chain works (Pimlico, Alchemy, Coinbase's developer platform, ...). Create a free account, pick Base Sepolia, and copy the bundler URL:
 
 ```powershell
-$env:PAYMASTER_URL = "https://api.developer.coinbase.com/rpc/v1/base-sepolia/<your key>"
+$env:BUNDLER_URL = "https://api.pimlico.io/v2/84532/rpc?apikey=YOUR_KEY"
+npm run live
 ```
 
-Coinbase's Developer Platform offers one (create a project, open Paymaster, and allow-list the contracts the players call: the token, the JINX escrow and the tic-tac-toe escrow; check their docs for the current steps and limits). The server hands the URL to the browser with `/config`, and the wallet attaches it to each batch. Because anyone can read it, **restrict it on the provider's side** to those contract addresses and set a spending limit. Gas on Base is cents, so a sponsored game costs about that much; measure it during the beta.
+**Gas sponsoring is optional.** With only `BUNDLER_URL`, a passkey wallet needs a little ETH like any other wallet (the checklist and "Copy my address" button explain it). To make gas free for players, also set the sponsor endpoint (for Pimlico and some others it is the same URL), and, if your provider uses policies, the context:
 
-`npm run ui-test:smart` plays a full match through a fake smart wallet that holds zero ETH, checks that approve and offer go out as one batch with the sponsor attached, and checks the reload sign-in. It does not exercise the real Coinbase popup, which needs a real browser and passkey: try that by hand on app.playpot.gg after deploying.
+```powershell
+$env:PAYMASTER_URL = $env:BUNDLER_URL
+$env:PAYMASTER_CONTEXT = '{"sponsorshipPolicyId":"sp_your_policy"}'
+```
+
+The server only forwards sponsor requests for operations that call the PlayPot contracts (the token and the escrows) with no ETH attached, limits each wallet to 120 sponsored actions an hour, and limits calls per address, whatever the provider's own policy says. Also set a spending limit on the provider's side. Gas on Base is cents, so a sponsored game costs about that much; measure it in the beta.
+
+Tests: `npm run ui-test:passkey` drives the real app with a real (virtual) passkey against a fake bundler and sponsor: it creates a passkey, checks that every operation carries a valid passkey signature over the right hash, that gas is sponsored, that the wallet deploys through the known factory on its first operation, plays a full JINX match from a wallet with no ETH, claims, survives a reload, and signs in again on a "new device" from the directory. `npm run ui-test:smart` checks batching with a fake EIP-5792 wallet. **Not covered:** the wallet contract and a real bundler, which need a live network. Try those by hand on Base Sepolia once `BUNDLER_URL` is set.
 
 ## Known limits of v0
 
