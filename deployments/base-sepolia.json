@@ -12,6 +12,40 @@
   "disputeBond": "5000000",
   "verified": true,
   "explorer": "https://sepolia.basescan.org/address/0x558f479c8de7019AA26893e743e4e9FF3F989FfD#code",
-  "jinxEscrow": "0x3cF2006B19758b9c5143Eb71022E7D7cD48c70F4",
-  "jinxMatchDurationSeconds": 7200
+  "jinxMatchDurationSeconds": 7200,
+  "jinxEscrowV1": "0x3cF2006B19758b9c5143Eb71022E7D7cD48c70F4",
+  "jinxEscrowV2": {
+    "address": "0xd8604826C40B57dA7472A1A813C10DC20Aa7555e",
+    "deployTx": "0x1a17034ad3220e736e879636efab776bba19b0b396d2930195d068cedc9d6808",
+    "block": 59135747,
+    "minStake": "10000000",
+    "maxStake": "100000000",
+    "hardMaxStake": "1000000000",
+    "refereeBondFloor": "500000000",
+    "refereeBondPosted": "1000000000",
+    "rakeTiers": [
+      {
+        "potFrom": "0",
+        "bps": 850
+      },
+      {
+        "potFrom": "500000000",
+        "bps": 700
+      },
+      {
+        "potFrom": "1000000000",
+        "bps": 500
+      },
+      {
+        "potFrom": "10000000000",
+        "bps": 300
+      }
+    ],
+    "challengeWindowSeconds": 1800,
+    "matchDurationSeconds": 7200,
+    "abortGraceSeconds": 600,
+    "disputeBond": "5000000",
+    "verified": false,
+    "explorer": "https://sepolia.basescan.org/address/0xd8604826C40B57dA7472A1A813C10DC20Aa7555e#code"
+  }
 }
