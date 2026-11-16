@@ -95,3 +95,7 @@ button, select, input { touch-action: manipulation; }
 .emailform h2 { margin-bottom: 6px; }
 .emailform label { display: block; width: 100%; }
 @media (max-width: 640px) { input.wide { width: 100%; } }
+
+/* ---- protect your wallet */
+.recovery { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin-top: 10px; background: rgba(251, 191, 36, .06); }
+.recovery h2 { color: var(--warn); margin-bottom: 6px; }

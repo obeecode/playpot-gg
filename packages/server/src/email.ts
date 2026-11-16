@@ -40,6 +40,8 @@ export interface VaultBlob {
   iv: string;
   ct: string;
   address: string;
+  /** Set for a recovery key: the wallet it is an extra owner of, and its owner index there. Public data, not secret. */
+  wallet?: { address: string; ownerIndex: number };
 }
 
 const B64 = /^[A-Za-z0-9+/_=-]{8,1024}$/;
@@ -56,7 +58,9 @@ export function validVault(b: unknown): b is VaultBlob {
     typeof v.salt === "string" && B64.test(v.salt) &&
     typeof v.iv === "string" && B64.test(v.iv) &&
     typeof v.ct === "string" && B64.test(v.ct) &&
-    typeof v.address === "string" && /^0x[0-9a-fA-F]{40}$/.test(v.address)
+    typeof v.address === "string" && /^0x[0-9a-fA-F]{40}$/.test(v.address) &&
+    (v.wallet === undefined ||
+      (typeof v.wallet === "object" && v.wallet !== null && typeof v.wallet.address === "string" && /^0x[0-9a-fA-F]{40}$/.test(v.wallet.address) && Number.isInteger(v.wallet.ownerIndex) && v.wallet.ownerIndex >= 0 && v.wallet.ownerIndex < 256))
   );
 }
 

@@ -3,6 +3,7 @@
 // never sees the key or the passphrase, so it cannot spend anything, and nobody can recover a forgotten passphrase.
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
+import type { WalletRef } from "./recovery.ts";
 
 export interface VaultBlob {
   v: 1;
@@ -12,6 +13,7 @@ export interface VaultBlob {
   iv: string;
   ct: string;
   address: Address;
+  wallet?: WalletRef; // set for a recovery key: the wallet it is an extra owner of. Public data, not secret.
 }
 
 export const KDF_ITERATIONS = 600_000;
@@ -34,13 +36,13 @@ export function passphraseProblem(p: string): string | null {
 }
 
 /** Encrypts a wallet key. The address is bound into the ciphertext, so a swapped blob fails to open. */
-export async function encryptWalletKey(privateKey: Hex, passphrase: string, iter = KDF_ITERATIONS): Promise<VaultBlob> {
+export async function encryptWalletKey(privateKey: Hex, passphrase: string, iter = KDF_ITERATIONS, wallet?: WalletRef): Promise<VaultBlob> {
   const address = privateKeyToAccount(privateKey).address;
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await aesKey(passphrase, salt, iter);
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource, additionalData: addrBytes(address) as BufferSource }, key, new TextEncoder().encode(privateKey)));
-  return { v: 1, kdf: "pbkdf2-sha256", iter, salt: b64(salt), iv: b64(iv), ct: b64(ct), address };
+  return { v: 1, kdf: "pbkdf2-sha256", iter, salt: b64(salt), iv: b64(iv), ct: b64(ct), address, ...(wallet ? { wallet } : {}) };
 }
 
 /** Opens a wallet key. A wrong passphrase, or a blob that was altered, is the same plain error. */
@@ -97,16 +99,20 @@ export function rememberVault(blob: VaultBlob) {
     /* private mode */
   }
 }
-export function sessionKey(): Hex | null {
+export function sessionKey(): { pk: Hex; wallet?: WalletRef } | null {
   try {
-    return (sessionStorage.getItem(SESSION_KEY) as Hex | null) ?? null;
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    if (raw.startsWith("0x")) return { pk: raw as Hex }; // an older tab
+    const v = JSON.parse(raw) as { pk: Hex; wallet?: WalletRef };
+    return /^0x[0-9a-f]{64}$/i.test(v.pk) ? v : null;
   } catch {
     return null;
   }
 }
-export function rememberSessionKey(pk: Hex) {
+export function rememberSessionKey(pk: Hex, wallet?: WalletRef) {
   try {
-    sessionStorage.setItem(SESSION_KEY, pk);
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ pk, ...(wallet ? { wallet } : {}) }));
   } catch {
     /* private mode */
   }

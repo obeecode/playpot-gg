@@ -11,8 +11,20 @@ const MAX_ENTRIES = 500_000;
 
 export type RegisterResult = "created" | "same" | "conflict" | "invalid" | "full";
 
+/** The wallet a passkey signs for, when it is not the wallet made from the passkey itself (a recovery passkey). */
+export interface WalletRef {
+  address: string;
+  ownerIndex: number;
+}
+const validRef = (w: unknown): w is WalletRef => {
+  const r = w as Partial<WalletRef> | null;
+  return !!r && typeof r.address === "string" && /^0x[0-9a-fA-F]{40}$/.test(r.address) && Number.isInteger(r.ownerIndex) && r.ownerIndex! >= 0 && r.ownerIndex! < 256;
+};
+const sameRef = (a?: WalletRef, b?: WalletRef) => (!a && !b) || (!!a && !!b && a.address.toLowerCase() === b.address.toLowerCase() && a.ownerIndex === b.ownerIndex);
+
 export class PasskeyRegistry {
   private keys = new Map<string, string>();
+  private wallets = new Map<string, WalletRef>();
   private file: string;
 
   constructor(dataDir: string) {
@@ -21,8 +33,11 @@ export class PasskeyRegistry {
     for (const line of readFileSync(this.file, "utf8").split("\n")) {
       if (!line.trim()) continue;
       try {
-        const { id, publicKey } = JSON.parse(line) as { id: string; publicKey: string };
-        if (ID.test(id) && KEY.test(publicKey) && !this.keys.has(id)) this.keys.set(id, publicKey.toLowerCase());
+        const { id, publicKey, wallet } = JSON.parse(line) as { id: string; publicKey: string; wallet?: WalletRef };
+        if (ID.test(id) && KEY.test(publicKey) && !this.keys.has(id)) {
+          this.keys.set(id, publicKey.toLowerCase());
+          if (validRef(wallet)) this.wallets.set(id, wallet);
+        }
       } catch {
         /* a damaged line is skipped */
       }
@@ -33,18 +48,22 @@ export class PasskeyRegistry {
     return this.keys.size;
   }
 
-  get(id: string): string | undefined {
-    return ID.test(id) ? this.keys.get(id) : undefined;
+  get(id: string): { publicKey: string; wallet?: WalletRef } | undefined {
+    if (!ID.test(id)) return undefined;
+    const publicKey = this.keys.get(id);
+    return publicKey ? { publicKey, wallet: this.wallets.get(id) } : undefined;
   }
 
-  register(id: unknown, publicKey: unknown): RegisterResult {
+  register(id: unknown, publicKey: unknown, wallet?: unknown): RegisterResult {
     if (typeof id !== "string" || typeof publicKey !== "string" || !ID.test(id) || !KEY.test(publicKey)) return "invalid";
+    if (wallet !== undefined && !validRef(wallet)) return "invalid";
     const key = publicKey.toLowerCase();
     const have = this.keys.get(id);
-    if (have) return have === key ? "same" : "conflict";
+    if (have) return have === key && sameRef(this.wallets.get(id), wallet as WalletRef | undefined) ? "same" : "conflict";
     if (this.keys.size >= MAX_ENTRIES) return "full";
     this.keys.set(id, key);
-    appendFileSync(this.file, JSON.stringify({ id, publicKey: key, at: Date.now() }) + "\n");
+    if (wallet) this.wallets.set(id, wallet as WalletRef);
+    appendFileSync(this.file, JSON.stringify({ id, publicKey: key, ...(wallet ? { wallet } : {}), at: Date.now() }) + "\n");
     return "created";
   }
 }

@@ -3,12 +3,33 @@
 // known factory on its first operation) and then executes the calls as the wallet on a local chain, so the tests can play
 // real games through it. It cannot check the wallet contract or a real bundler: those need a live network.
 import { createServer } from "node:http";
-import { decodeAbiParameters, decodeFunctionData, keccak256, pad, parseAbi, type Address, type Hex } from "viem";
+import { decodeAbiParameters, decodeFunctionData, encodeAbiParameters, getAddress, hexToString, keccak256, pad, parseAbi, recoverAddress, toFunctionSelector, type Address, type Hex } from "viem";
 import { entryPoint06Address, getUserOperationHash } from "viem/account-abstraction";
+import { WebAuthnP256 } from "ox";
 import type { BrowserContext } from "playwright-core";
 
 export const FACTORY = "0xba5ed110efdba3d005bfc882d75358acbbb85842";
 const walletAbi = parseAbi(["function execute(address target, uint256 value, bytes data)", "function executeBatch((address target, uint256 value, bytes data)[] calls)"]);
+const factoryAbi = parseAbi(["function createAccount(bytes[] owners, uint256 nonce)"]);
+const ownerAbi = parseAbi(["function addOwnerAddress(address owner)", "function addOwnerPublicKey(bytes32 x, bytes32 y)"]);
+const SEL = {
+  ownerCount: toFunctionSelector("ownerCount()"),
+  nextOwnerIndex: toFunctionSelector("nextOwnerIndex()"),
+  ownerAtIndex: toFunctionSelector("ownerAtIndex(uint256)"),
+};
+const webAuthnAuth = [
+  {
+    components: [
+      { name: "authenticatorData", type: "bytes" },
+      { name: "clientDataJSON", type: "bytes" },
+      { name: "challengeIndex", type: "uint256" },
+      { name: "typeIndex", type: "uint256" },
+      { name: "r", type: "uint256" },
+      { name: "s", type: "uint256" },
+    ],
+    type: "tuple",
+  },
+] as const;
 const sigWrapper = [{ components: [{ name: "ownerIndex", type: "uint256" }, { name: "signatureData", type: "bytes" }], type: "tuple" }] as const;
 
 export interface FakeOp {
@@ -24,12 +45,36 @@ export interface OwnerCheck {
   ownerIndex: bigint;
   signatureData: Hex; // the owner's signature, as the wallet contract receives it
   sender: Address;
+  ownerBytes?: Hex; // the owner at that index: a 32-byte padded address, or a 64-byte passkey public key
+}
+
+/**
+ * What the wallet contract does with a signature: check it against the owner at that index. An address owner signs the
+ * hash directly; a passkey owner signs through WebAuthn.
+ */
+export async function verifyOwnerSignature(c: OwnerCheck): Promise<boolean> {
+  if (!c.ownerBytes) return false;
+  if (c.ownerBytes.length === 2 + 64) {
+    if (c.signatureData.length !== 2 + 65 * 2) return false;
+    return (await recoverAddress({ hash: c.userOpHash, signature: c.signatureData })) === getAddress(`0x${c.ownerBytes.slice(-40)}`);
+  }
+  if (c.ownerBytes.length !== 2 + 128) return false;
+  const [auth] = decodeAbiParameters(webAuthnAuth, c.signatureData);
+  return WebAuthnP256.verify({
+    challenge: c.userOpHash,
+    metadata: { authenticatorData: auth.authenticatorData, clientDataJSON: hexToString(auth.clientDataJSON), challengeIndex: Number(auth.challengeIndex), typeIndex: Number(auth.typeIndex), userVerificationRequired: true },
+    publicKey: { prefix: 4, x: BigInt(`0x${c.ownerBytes.slice(2, 66)}`), y: BigInt(`0x${c.ownerBytes.slice(66)}`) },
+    signature: { r: auth.r, s: auth.s },
+  });
 }
 
 type Rpc = (method: string, params: unknown[]) => Promise<unknown>;
 
-export async function startFakeAa(o: { rpc: Rpc; chainId: number; ownerCheck: (c: OwnerCheck) => boolean | Promise<boolean> }) {
+export async function startFakeAa(o: { rpc: Rpc; chainId: number; ownerCheck?: (c: OwnerCheck) => boolean | Promise<boolean> }) {
+  const ownerCheck = o.ownerCheck ?? verifyOwnerSignature;
   const state = {
+    owners: new Map<string, Hex[]>(), // wallet -> its owners, as the wallet contract would keep them
+    adminCalls: [] as string[],
     nonces: new Map<string, bigint>(),
     deployed: new Set<string>(),
     ops: [] as FakeOp[],
@@ -57,8 +102,13 @@ export async function startFakeAa(o: { rpc: Rpc; chainId: number; ownerCheck: (c
         signature: op.signature,
       },
     });
+    // A first operation deploys the wallet through the factory, which sets its first owner(s).
+    if (op.initCode.length > 2) {
+      const created = decodeFunctionData({ abi: factoryAbi, data: `0x${op.initCode.slice(42)}` as Hex });
+      state.owners.set(sender, [...created.args[0]] as Hex[]);
+    }
     const [{ ownerIndex, signatureData }] = decodeAbiParameters(sigWrapper, op.signature);
-    const signatureValid = await o.ownerCheck({ userOpHash, ownerIndex, signatureData, sender: op.sender as Address });
+    const signatureValid = await ownerCheck({ userOpHash, ownerIndex, signatureData, sender: op.sender as Address, ownerBytes: state.owners.get(sender)?.[Number(ownerIndex)] });
     const d = decodeFunctionData({ abi: walletAbi, data: op.callData });
     const calls = d.functionName === "execute" ? [{ target: d.args[0], value: d.args[1], data: d.args[2] }] : d.args[0];
     state.ops.push({ sender, calls: calls.length, withInitCode: op.initCode.length > 2, sponsored: op.paymasterAndData.length > 2, signatureValid });
@@ -69,12 +119,28 @@ export async function startFakeAa(o: { rpc: Rpc; chainId: number; ownerCheck: (c
     let last: unknown;
     let success = true;
     for (const c of calls) {
+      if (c.target.toLowerCase() === sender) {
+        // a call from the wallet to itself: adding an owner changes the wallet's owner list
+        const a = decodeFunctionData({ abi: ownerAbi, data: c.data });
+        const list = state.owners.get(sender) ?? [];
+        list.push(a.functionName === "addOwnerAddress" ? pad(a.args[0], { size: 32 }) : (`0x${a.args[0].slice(2)}${a.args[1].slice(2)}` as Hex));
+        state.owners.set(sender, list);
+        state.adminCalls.push(a.functionName);
+        continue;
+      }
       const hash = (await o.rpc("eth_sendTransaction", [{ from: op.sender, to: c.target, data: c.data, value: "0x0", gas: "0x2dc6c0", gasPrice: "0x0" }])) as string;
       let r: { status: string; logs: unknown[] } | undefined;
       while (!r) r = ((await o.rpc("eth_getTransactionReceipt", [hash])) as typeof r | null) ?? undefined;
       logs.push(...r.logs);
       last = r;
       if (r.status !== "0x1") success = false;
+    }
+    if (!last) {
+      // an operation that only administers the wallet still lands in a bundle transaction on a real chain
+      const hash = (await o.rpc("eth_sendTransaction", [{ from: op.sender, to: op.sender, value: "0x0", gas: "0x5208", gasPrice: "0x0" }])) as string;
+      let r: { status: string; logs: unknown[] } | undefined;
+      while (!r) r = ((await o.rpc("eth_getTransactionReceipt", [hash])) as typeof r | null) ?? undefined;
+      last = r;
     }
     state.nonces.set(sender, (state.nonces.get(sender) ?? 0n) + 1n);
     state.deployed.add(sender);
@@ -134,6 +200,17 @@ export async function startFakeAa(o: { rpc: Rpc; chainId: number; ownerCheck: (c
               return { jsonrpc: "2.0", id: c.id, result: pad(`0x${(state.nonces.get(sender) ?? 0n).toString(16)}`, { size: 32 }) };
             }
             if (c.method === "eth_getCode" && state.deployed.has(String(c.params[0]).toLowerCase())) return { jsonrpc: "2.0", id: c.id, result: "0x60" };
+            // the wallet's own owner questions, answered from the list the fake keeps
+            const walletOwners = c.method === "eth_call" && tx?.to ? state.owners.get(tx.to.toLowerCase()) : undefined;
+            if (walletOwners && tx?.data) {
+              const sel = tx.data.slice(0, 10);
+              if (sel === SEL.ownerCount || sel === SEL.nextOwnerIndex) return { jsonrpc: "2.0", id: c.id, result: pad(`0x${walletOwners.length.toString(16)}`, { size: 32 }) };
+              if (sel === SEL.ownerAtIndex) {
+                const at = walletOwners[Number(BigInt(`0x${tx.data.slice(10, 74)}`))];
+                if (!at) return { jsonrpc: "2.0", id: c.id, error: { code: 3, message: "execution reverted" } };
+                return { jsonrpc: "2.0", id: c.id, result: encodeAbiParameters([{ type: "bytes" }], [at]) };
+              }
+            }
             const r = await fetch(`${webUrl}/rpc`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
             return r.json();
           }),

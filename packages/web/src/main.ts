@@ -68,8 +68,10 @@ import {
   rememberVault,
   saveVault,
   sessionKey,
+  KDF_ITERATIONS,
   type VaultBlob,
 } from "./emailWallet.ts";
+import { addOwnerAddressCall, addOwnerPublicKeyCall, isOwnerAt, isProtected, ownerBytesOfAddress, ownerBytesOfPasskey, readOwners, type WalletRef } from "./recovery.ts";
 
 // ------------------------------------------------------------------------------- types & state
 
@@ -85,6 +87,7 @@ interface Config {
 }
 
 interface EmailFlow {
+  purpose: "signin" | "recovery"; // recovery adds this email as a second owner of the wallet that is signed in
   step: "email" | "code" | "newpass" | "unlock";
   email: string;
   code: string;
@@ -163,6 +166,8 @@ const S = {
   jview: null as JinxView | null,
   smart: null as Eip1193 | null, // set while signed in with a passkey or email (smart) wallet
   walletKind: "passkey" as "passkey" | "email",
+  recovery: "unknown" as "unknown" | "needed" | "ok", // a smart wallet may not stake until it has a second owner
+  recoveryExempt: false, // test wallets that are not real smart accounts
   email: null as EmailFlow | null, // the email sign-in form, while it is open
   practice: null as Practice | null,
   practiceBestOf: 3 as 3 | 5,
@@ -314,7 +319,7 @@ async function init() {
       const k = sessionKey(); // an email wallet opened in this tab: a reload does not ask for the passphrase again
       if (k) {
         try {
-          await connectEmailKey(k);
+          await connectEmailKey(k.pk, k.wallet);
           restored = true;
         } catch {
           S.smart = null;
@@ -360,7 +365,25 @@ async function connectPasskey(mode: PasskeyMode) {
     ({ provider, address } = await openPasskeyWallet(rec!, { publicClient: S.pub, serverUrl: S.serverUrl, sponsored: !!S.cfg.aa.sponsored }));
   }
   applySmart(provider, address, "passkey");
+  S.recoveryExempt = !!injected;
   localStorage.setItem("playpot:wallet", "smart");
+  await checkRecovery();
+}
+
+/** Looks at the wallet itself: does it have a second owner? Anything else (burner, MetaMask) has nothing to recover. */
+async function checkRecovery() {
+  if (!S.smart || S.recoveryExempt || !S.pub || !S.addr) {
+    S.recovery = "ok";
+    return;
+  }
+  S.recovery = isProtected(await readOwners(S.pub, S.addr)) ? "ok" : "needed";
+}
+
+/** Staking is blocked until a smart wallet has a recovery method: losing the only key would lose the money in it. */
+async function requireRecovery() {
+  if (!S.smart) return;
+  await checkRecovery();
+  if (S.recovery !== "ok") throw new Error("Add a recovery method first (see “Protect your wallet”). If this device or your passphrase is lost, nobody can restore the wallet.");
 }
 
 function applySmart(provider: Eip1193, address: Address, kind: "passkey" | "email") {
@@ -374,20 +397,36 @@ function applySmart(provider: Eip1193, address: Address, kind: "passkey" | "emai
 }
 
 /** An email wallet: a smart account whose owner key was opened with the player's passphrase. */
-async function connectEmailKey(pk: Hex) {
+async function connectEmailKey(pk: Hex, wallet?: WalletRef) {
   if (!S.cfg || !S.chain || !S.pub) return;
   if (!S.cfg.aa?.enabled) throw new Error("wallets are not switched on for this server");
-  const { provider, address } = await openSmartWallet(privateKeyToAccount(pk), { publicClient: S.pub, serverUrl: S.serverUrl, sponsored: !!S.cfg.aa.sponsored });
+  const owner = privateKeyToAccount(pk);
+  // A recovery key signs for a wallet made from something else: check the wallet really lists it, rather than trust a record.
+  if (wallet && !(await isOwnerAt(S.pub, wallet, ownerBytesOfAddress(owner.address)))) throw new Error("That recovery key is not an owner of the wallet it points to.");
+  const { provider, address } = await openSmartWallet(owner, { publicClient: S.pub, serverUrl: S.serverUrl, sponsored: !!S.cfg.aa.sponsored }, wallet);
   applySmart(provider, address, "email");
-  rememberSessionKey(pk);
+  S.recoveryExempt = false;
+  rememberSessionKey(pk, wallet);
   localStorage.setItem("playpot:wallet", "email");
+  await checkRecovery();
 }
 
 // ------------------------------------------------------------------------------------------- the email sign-in form
 
-function openEmailFlow() {
-  const v = localVault();
-  S.email = { step: v ? "unlock" : "email", email: "", code: "", pass: "", pass2: "", vault: v ?? undefined, note: v ? "Welcome back. Enter your passphrase to unlock the wallet saved on this device." : "", error: "", busy: false };
+function openEmailFlow(purpose: "signin" | "recovery" = "signin") {
+  const v = purpose === "signin" ? localVault() : null;
+  S.email = {
+    purpose,
+    step: v ? "unlock" : "email",
+    email: "",
+    code: "",
+    pass: "",
+    pass2: "",
+    vault: v ?? undefined,
+    note: v ? "Welcome back. Enter your passphrase to unlock the wallet saved on this device." : purpose === "recovery" ? "This email becomes a second key to your wallet. If you lose this device, signing in with your email gets you back in." : "",
+    error: "",
+    busy: false,
+  };
   render();
 }
 
@@ -430,8 +469,15 @@ const emailActions = {
       f.token = r.token;
       if (r.hasVault) {
         f.vault = (await fetchVault(S.serverUrl, r.token)).blob;
-        f.step = "unlock";
-        f.note = "This email already has a wallet. Enter its passphrase.";
+        if (f.purpose === "recovery") {
+          // an earlier attempt may have saved the recovery key before the wallet was updated: pick it up where it stopped
+          if (f.vault.wallet?.address.toLowerCase() !== S.addr?.toLowerCase()) throw new Error("This email is already used by a different wallet. Use another email address.");
+          f.step = "unlock";
+          f.note = "A recovery key for this wallet is already saved under this email. Enter its passphrase to finish adding it.";
+        } else {
+          f.step = "unlock";
+          f.note = "This email already has a wallet. Enter its passphrase.";
+        }
       } else {
         f.step = "newpass";
         f.note = "This is a new wallet. Choose a passphrase. It encrypts your wallet key in this browser. Nobody can recover it for you, PlayPot included.";
@@ -439,6 +485,7 @@ const emailActions = {
     }),
   emailfinish: () =>
     emailStep(async (f) => {
+      if (f.purpose === "recovery") return void (await finishEmailRecovery(f));
       let pk: Hex;
       if (f.step === "newpass") {
         const problem = passphraseProblem(f.pass);
@@ -452,10 +499,72 @@ const emailActions = {
         pk = await decryptWalletKey(f.vault!, f.pass);
         rememberVault(f.vault!);
       }
-      await connectEmailKey(pk);
+      await connectEmailKey(pk, f.vault?.wallet);
       S.email = null;
     }),
+  recoverEmail: () => openEmailFlow("recovery"),
+  recoverPasskey: () => run("Add passkey recovery", addPasskeyRecovery),
+  recoverCheck: () => run("Check recovery", checkRecovery),
 };
+
+/** A passkey wallet gets an email key as its second owner. The key is saved (encrypted) before the wallet is changed, so an interrupted attempt can be finished. */
+async function finishEmailRecovery(f: EmailFlow) {
+  if (!S.pub || !S.addr || !S.smart) throw new Error("Sign in with a passkey wallet first.");
+  const st = await readOwners(S.pub, S.addr);
+  if (!st.deployed) throw new Error("A wallet exists on-chain after its first transaction. Mint test tokens first, then add recovery.");
+  let pk: Hex;
+  let ref: WalletRef;
+  if (f.step === "newpass") {
+    const problem = passphraseProblem(f.pass);
+    if (problem) throw new Error(problem);
+    if (f.pass !== f.pass2) throw new Error("The two passphrases do not match.");
+    pk = newWalletKey();
+    ref = { address: S.addr, ownerIndex: st.next };
+    const blob = await encryptWalletKey(pk, f.pass, KDF_ITERATIONS, ref);
+    await saveVault(S.serverUrl, f.token!, blob);
+    rememberVault(blob);
+  } else {
+    pk = await decryptWalletKey(f.vault!, f.pass);
+    ref = f.vault!.wallet!;
+  }
+  const keyAddress = privateKeyToAccount(pk).address;
+  if (!(await isOwnerAt(S.pub, ref, ownerBytesOfAddress(keyAddress)))) {
+    await batch([addOwnerAddressCall(S.addr, keyAddress)]); // one passkey prompt
+    if (!(await isOwnerAt(S.pub, ref, ownerBytesOfAddress(keyAddress)))) throw new Error("The recovery key was not added to the wallet. Try again.");
+  }
+  await checkRecovery();
+  S.email = null;
+  S.msg = "Recovery added. Signing in with this email now opens this same wallet on any device.";
+}
+
+/** An email wallet gets a passkey as its second owner. A passkey from an earlier, unfinished attempt is reused. */
+async function addPasskeyRecovery() {
+  if (!S.pub || !S.addr || !S.smart) throw new Error("Sign in with an email wallet first.");
+  const st = await readOwners(S.pub, S.addr);
+  if (!st.deployed) throw new Error("A wallet exists on-chain after its first transaction. Mint test tokens first, then add recovery.");
+  let rec = savedPasskey();
+  if (!(rec?.wallet && rec.wallet.address.toLowerCase() === S.addr.toLowerCase() && rec.wallet.ownerIndex === st.next)) {
+    rec = await createPasskey(S.serverUrl, { address: S.addr, ownerIndex: st.next }); // one passkey prompt
+  }
+  const ref = rec.wallet!;
+  if (!(await isOwnerAt(S.pub, ref, ownerBytesOfPasskey(rec.publicKey)))) {
+    await batch([addOwnerPublicKeyCall(S.addr, rec.publicKey)]);
+    if (!(await isOwnerAt(S.pub, ref, ownerBytesOfPasskey(rec.publicKey)))) throw new Error("The passkey was not added to the wallet. Try again.");
+  }
+  await checkRecovery();
+}
+
+/** The "protect your wallet" box: shown until the wallet has a second owner. */
+function recoveryPanel(): string {
+  if (!S.smart || S.recoveryExempt) return "";
+  if (S.recovery === "ok") return `<div class="dim" id="recovery-ok"><span class="ok">&#10003;</span> Recovery method added. Losing this device or one key will not lose the wallet.</div>`;
+  const dis = S.busy || S.email ? "disabled" : "";
+  const mine = S.walletKind === "passkey" ? "passkey" : "email";
+  const add = S.walletKind === "passkey" ? `<button class="primary" data-act="recoverEmail" id="recover-email" ${dis}>Add email recovery</button>` : `<button class="primary" data-act="recoverPasskey" id="recover-passkey" ${dis}>Add passkey recovery</button>`;
+  return `<div id="recovery" class="recovery"><h2>Protect your wallet</h2>
+    <div>This wallet can be opened with one ${mine} only. If you lose it, <b>nobody can restore the wallet</b>, PlayPot included, and anything in it is gone. Add a second way in before you stake. ${S.walletKind === "passkey" ? "Your email will be the backup." : "A passkey on this or another device will be the backup."}</div>
+    <div class="row">${add}<button data-act="recoverCheck" ${dis}>I did it, check again</button></div></div>`;
+}
 
 function emailForm(): string {
   const f = S.email;
@@ -468,10 +577,10 @@ function emailForm(): string {
       : f.step === "code"
         ? `${field("em-code", "6-digit code", f.code, "text", 'inputmode="numeric" maxlength="6" autocomplete="one-time-code"')}<button class="primary" data-act="emailverify" id="emailverify" ${dis}>Check code</button><button data-act="emailother" ${dis}>Use a different email</button>`
         : f.step === "newpass"
-          ? `${field("em-pass", "Passphrase", f.pass, "password", 'autocomplete="new-password"')}${field("em-pass2", "Same passphrase again", f.pass2, "password", 'autocomplete="new-password"')}<button class="primary" data-act="emailfinish" id="emailfinish" ${dis}>Create my wallet</button>`
+          ? `${field("em-pass", "Passphrase", f.pass, "password", 'autocomplete="new-password"')}${field("em-pass2", "Same passphrase again", f.pass2, "password", 'autocomplete="new-password"')}<button class="primary" data-act="emailfinish" id="emailfinish" ${dis}>${f.purpose === "recovery" ? "Add this recovery key" : "Create my wallet"}</button>`
           : `${field("em-pass", "Passphrase", f.pass, "password", 'autocomplete="current-password"')}<button class="primary" data-act="emailfinish" id="emailfinish" ${dis}>Unlock</button><button data-act="emailother" ${dis}>Use a different email</button>`;
   return `<div id="emailform" class="emailform">
-    <h2>Sign in with email</h2>
+    <h2>${f.purpose === "recovery" ? "Add email recovery" : "Sign in with email"}</h2>
     ${f.note ? `<div class="dim">${esc(f.note)}</div>` : ""}
     <div class="row">${body}<button data-act="emailclose" ${dis}>Cancel</button></div>
     ${f.busy ? '<div class="dim"><span class="spin"></span>Working…</div>' : ""}
@@ -488,6 +597,7 @@ function emailButton(): string {
 async function connect(burner: boolean) {
   if (!S.cfg || !S.chain) return;
   S.smart = null;
+  S.recovery = "ok"; // a burner or MetaMask wallet is not a smart account: nothing to add
   localStorage.removeItem("playpot:wallet");
   if (burner) {
     const name = params.get("burner") || "default";
@@ -591,6 +701,7 @@ const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
     }),
   create: () =>
     run("Create offer", async () => {
+      await requireRecovery();
       const stake = parseUnits(S.stakeInput || "0", 6);
       const lim = S.game === "jinx" ? S.cfg?.jinx?.limits : undefined;
       if (lim && stake < BigInt(lim.minStake)) throw new Error(`The minimum stake is ${money(BigInt(lim.minStake))} tPUSD each.`);
@@ -612,6 +723,7 @@ const actions: Record<string, (el: HTMLElement) => void | Promise<void>> = {
     }),
   challenge: (el) =>
     run("Challenge", async () => {
+      await requireRecovery();
       const id = BigInt(el.dataset.id!);
       const stake = BigInt(el.dataset.stake!);
       const pk = generatePrivateKey();
@@ -1428,7 +1540,7 @@ function render() {
         cfg.chainId === 31337 ? `<button data-act="fund">Dev: 10 ETH</button>` : "",
         S.smart ? "" : passkeyButtons(false),
         S.smart ? "" : emailButton(),
-      ].join("")}</div>${emailForm()}`;
+      ].join("")}</div>${recoveryPanel()}${emailForm()}`;
   }
   html += `</section>`;
 

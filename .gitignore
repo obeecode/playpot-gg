@@ -8,3 +8,4 @@ deployments/local.json
 *.log
 data/
 deploy/.env
+backups/

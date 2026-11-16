@@ -1,7 +1,7 @@
 // Account-abstraction relay for passkey wallets. The player's browser only ever talks to this server; the server talks to
 // the bundler and gas sponsor (paymaster) providers. So a provider that is blocked where the player lives does not matter,
 // and the providers' API keys never reach the browser. The server also decides what it is willing to sponsor.
-import { decodeFunctionData, getAddress, isAddress, parseAbi, type Address, type Hex } from "viem";
+import { decodeFunctionData, getAddress, isAddress, parseAbi, toFunctionSelector, type Address, type Hex } from "viem";
 
 /** The Coinbase Smart Wallet factories (v1.1 and v1). A first transaction may deploy the wallet through one of them. */
 export const WALLET_FACTORIES: readonly string[] = ["0xba5ed110efdba3d005bfc882d75358acbbb85842", "0x0ba5ed0c6aa8c49038f819e587e2633c4a9f428a"];
@@ -23,7 +23,16 @@ export const PAYMASTER_METHODS = new Set(["pm_getPaymasterStubData", "pm_getPaym
 
 const MAX_CALLS_PER_OP = 8;
 
-export type Sponsorable = { ok: true; sender: Address } | { ok: false; reason: string };
+/** Adding an owner is the one piece of wallet administration that is sponsored: it is how a wallet gets its recovery method. */
+const ADD_OWNER_SELECTORS = new Set([toFunctionSelector("addOwnerAddress(address)"), toFunctionSelector("addOwnerPublicKey(bytes32,bytes32)")]);
+/** The calls that lock a player's stake: offering a game or accepting a challenge. */
+const STAKE_SELECTORS = new Set([
+  toFunctionSelector("createOffer(uint256,uint64,address)"),
+  toFunctionSelector("createOffer(uint256,uint64,address,uint8)"),
+  toFunctionSelector("challenge(uint256,address)"),
+]);
+
+export type Sponsorable = { ok: true; sender: Address; locksStake: boolean } | { ok: false; reason: string };
 
 /**
  * Decides whether an operation may be paid for. It must come from a wallet address, may deploy that wallet through a
@@ -31,7 +40,7 @@ export type Sponsorable = { ok: true; sender: Address } | { ok: false; reason: s
  * else (adding an owner, calling another contract, sending value) is refused, so a sponsor policy cannot be drained
  * by someone using our relay for their own purposes.
  */
-export function checkSponsorable(userOp: unknown, allowedTargets: readonly Address[]): Sponsorable {
+export function checkSponsorable(userOp: unknown, allowedTargets: readonly Address[], stakeTargets: readonly Address[] = []): Sponsorable {
   const op = userOp as { sender?: unknown; initCode?: unknown; factory?: unknown; callData?: unknown } | null;
   if (!op || typeof op !== "object") return { ok: false, reason: "malformed operation" };
   if (typeof op.sender !== "string" || !isAddress(op.sender)) return { ok: false, reason: "bad sender" };
@@ -40,20 +49,30 @@ export function checkSponsorable(userOp: unknown, allowedTargets: readonly Addre
   if (typeof op.factory === "string" && op.factory !== "0x" && !WALLET_FACTORIES.includes(op.factory.toLowerCase())) return { ok: false, reason: "unknown wallet factory" };
   if (typeof op.callData !== "string" || !/^0x[0-9a-fA-F]*$/.test(op.callData)) return { ok: false, reason: "bad call data" };
 
-  let calls: Array<{ target: Address; value: bigint }>;
+  let calls: Array<{ target: Address; value: bigint; data: Hex }>;
   try {
     const d = decodeFunctionData({ abi: walletAbi, data: op.callData as Hex });
-    calls = d.functionName === "execute" ? [{ target: d.args[0], value: d.args[1] }] : d.args[0].map((c) => ({ target: c.target, value: c.value }));
+    calls = d.functionName === "execute" ? [{ target: d.args[0], value: d.args[1], data: d.args[2] }] : d.args[0].map((c) => ({ target: c.target, value: c.value, data: c.data }));
   } catch {
     return { ok: false, reason: "only plain calls from the wallet are sponsored" };
   }
   if (calls.length === 0 || calls.length > MAX_CALLS_PER_OP) return { ok: false, reason: "unsupported number of calls" };
   const allowed = new Set(allowedTargets.map((a) => a.toLowerCase()));
+  const stake = new Set(stakeTargets.map((a) => a.toLowerCase()));
+  const sender = getAddress(op.sender);
+  let locksStake = false;
   for (const c of calls) {
-    if (!allowed.has(c.target.toLowerCase())) return { ok: false, reason: "that contract is not sponsored" };
     if (c.value !== 0n) return { ok: false, reason: "no ETH may be attached" };
+    const selector = c.data.slice(0, 10).toLowerCase();
+    if (c.target.toLowerCase() === sender.toLowerCase()) {
+      // a call from the wallet to itself: only adding an owner (a recovery method)
+      if (!ADD_OWNER_SELECTORS.has(selector as Hex)) return { ok: false, reason: "wallet administration is not sponsored, except adding a recovery method" };
+      continue;
+    }
+    if (!allowed.has(c.target.toLowerCase())) return { ok: false, reason: "that contract is not sponsored" };
+    if (stake.has(c.target.toLowerCase()) && STAKE_SELECTORS.has(selector as Hex)) locksStake = true;
   }
-  return { ok: true, sender: getAddress(op.sender) };
+  return { ok: true, sender, locksStake };
 }
 
 /** A sliding-window counter per key. */
@@ -87,6 +106,9 @@ export interface AaOptions {
   paymasterUrl?: string; // the gas sponsor endpoint; leave out to make players pay their own gas
   paymasterContext?: unknown; // for example { sponsorshipPolicyId: "..." }; set by us, never by the browser
   allowedTargets: readonly Address[];
+  stakeTargets?: readonly Address[]; // the escrows: calls that lock a stake need a protected wallet
+  /** Says whether a wallet has a recovery method (at least two owners). When set, staking from an unprotected wallet is not sponsored. */
+  walletProtected?: (wallet: Address) => Promise<boolean>;
   sponsoredPerSenderPerHour?: number;
   callsPerIpPerHour?: number;
   fetchFn?: typeof fetch;
@@ -129,7 +151,8 @@ export function createAa(o: AaOptions) {
         console.warn(`relay: ${String(call.method)} answered ${res.status}: ${detail}`);
         return rpcError(call.id, -32000, `the bundler service answered ${res.status}: ${detail}`);
       }
-      if (text.includes('"error"')) {
+      // a provider without a gas price helper is normal: the app falls back to the node's estimate, so it is not worth a log line
+      if (text.includes('"error"') && call.method !== "pimlico_getUserOperationGasPrice") {
         try {
           const msg = (JSON.parse(text) as { error?: { message?: string } }).error?.message;
           if (msg) console.warn(`relay: ${String(call.method)} was refused: ${redact(msg.slice(0, 200))}`);
@@ -178,8 +201,11 @@ export function createAa(o: AaOptions) {
       if (typeof call.method !== "string" || !PAYMASTER_METHODS.has(call.method)) return rpcError(call.id, -32601, "method not allowed");
       if (!byIp.allow(ip)) return rpcError(call.id, -32005, "rate limit reached, try again later");
       const params = Array.isArray(call.params) ? call.params.slice() : [];
-      const verdict = checkSponsorable(params[0], o.allowedTargets);
+      const verdict = checkSponsorable(params[0], o.allowedTargets, o.stakeTargets ?? []);
       if (!verdict.ok) return rpcError(call.id, -32602, `not sponsored: ${verdict.reason}`);
+      if (verdict.locksStake && o.walletProtected && !(await o.walletProtected(verdict.sender))) {
+        return rpcError(call.id, -32602, "not sponsored: add a recovery method to this wallet before staking");
+      }
       // Only the data call spends the sponsor's money; the stub call just sizes the operation.
       if (call.method === "pm_getPaymasterData" && !bySender.allow(verdict.sender)) return rpcError(call.id, -32005, "this wallet has reached the hourly limit for sponsored actions");
       if (o.paymasterContext !== undefined) {

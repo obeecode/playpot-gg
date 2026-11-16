@@ -31,7 +31,8 @@
     "ui-test:practice": "node scripts/ui-test-practice.ts",
     "ui-test:smart": "node scripts/ui-test-smart.ts",
     "ui-test:passkey": "node scripts/ui-test-passkey.ts",
-    "ui-test:email": "node scripts/ui-test-email.ts"
+    "ui-test:email": "node scripts/ui-test-email.ts",
+    "backup": "node scripts/backup-data.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -148,3 +148,11 @@ test("the Brevo request has the shape their API expects, and never leaks the key
   const bad = brevoMailer({ apiKey: "SECRET-KEY", fromEmail: "x@y.zz", fetchFn: (async () => new Response("sender not verified", { status: 400 })) as unknown as typeof fetch });
   await assert.rejects(bad.sendCode("a@b.co", "123456"), (e: Error) => /400/.test(e.message) && !/SECRET/.test(e.message));
 });
+
+test("a recovery key's saved blob may say which wallet it belongs to, and only with a sensible wallet", () => {
+  const ok = { ...blob(), wallet: { address: "0x00000000000000000000000000000000000000b2", ownerIndex: 1 } };
+  assert.equal(validVault(ok), true);
+  assert.equal(validVault({ ...ok, wallet: { address: "nope", ownerIndex: 1 } }), false);
+  assert.equal(validVault({ ...ok, wallet: { address: ok.wallet.address, ownerIndex: -1 } }), false);
+  assert.equal(validVault({ ...ok, wallet: "x" }), false);
+});

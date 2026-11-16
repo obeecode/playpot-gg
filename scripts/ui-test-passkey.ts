@@ -73,27 +73,12 @@ try {
   const { token, escrow } = await deployContracts({ rpc: RPC, deployerPk: DEPLOYER, referee, treasury });
   const jinxEscrow = await deployJinxV2({ rpc: RPC, deployerPk: DEPLOYER, refereePk: REFEREE, treasury, token });
 
-  // ---- the shared fake bundler + gas sponsor; here it checks the passkey's WebAuthn signature over each operation
-  let ownerKey = "" as Hex; // the passkey's public key, learned from the page after sign-up
-  const fake = await startFakeAa({
-    rpc,
-    chainId,
-    ownerCheck: ({ userOpHash, ownerIndex, signatureData }) => {
-      const [auth] = decodeAbiParameters(webAuthnAuth, signatureData);
-      return (
-        ownerIndex === 0n &&
-        WebAuthnP256.verify({
-          challenge: userOpHash,
-          metadata: { authenticatorData: auth.authenticatorData, clientDataJSON: hexToString(auth.clientDataJSON), challengeIndex: Number(auth.challengeIndex), typeIndex: Number(auth.typeIndex), userVerificationRequired: true },
-          publicKey: { prefix: 4, x: BigInt(`0x${ownerKey.slice(2, 66)}`), y: BigInt(`0x${ownerKey.slice(66)}`) },
-          signature: { r: auth.r, s: auth.s },
-        })
-      );
-    },
-  });
+  // ---- the shared fake bundler + gas sponsor: it keeps each wallet's owner list and checks every signature against the owner at its index
+  const fake = await startFakeAa({ rpc, chainId });
   closeFake = fake.close;
   const state = fake.state;
   const bundlerUrl = fake.url;
+  const mails: Array<{ to: string; code: string }> = [];
 
   server = await startServer({
     rpcUrl: RPC,
@@ -107,6 +92,9 @@ try {
     proxyRpc: true,
     bundlerUrl,
     paymasterUrl: bundlerUrl,
+    mailer: { sendCode: async (to, c) => void mails.push({ to, code: c }) },
+    // the relay's recovery rule, answered from the fake wallet's owner list (a local chain has no wallet contract)
+    walletProtected: async (w) => (fake.state.owners.get(w.toLowerCase())?.length ?? 0) >= 2,
     jinxRoom: { startDelayMs: 400, turnGapMs: 300, gameGapMs: 500, revealMs: 4000 },
   });
   const webUrl = `http://localhost:${server.port}`; // WebAuthn needs a real host name, not an IP address
@@ -151,7 +139,6 @@ try {
   await waitText(alice, "#addr", /passkey wallet/);
   const addrA = ((await alice.textContent("#addr")) ?? "").match(/0x[0-9a-fA-F]{40}/)![0];
   const rec = JSON.parse((await alice.evaluate(() => localStorage.getItem("playpot:passkey"))) as string) as { id: string; publicKey: Hex };
-  ownerKey = rec.publicKey;
   check(rec.publicKey.length === 130, "a passkey was created on the page, with a P-256 public key");
   const dir = await fetch(`${webUrl}/passkey/${encodeURIComponent(rec.id)}`);
   check(dir.ok && ((await dir.json()) as { publicKey: string }).publicKey === rec.publicKey.toLowerCase(), "its public key is in the server's directory");
@@ -169,8 +156,35 @@ try {
   check(state.ops.every((o) => o.signatureValid), "its passkey signature verifies over the operation's hash");
   check(state.ops.every((o) => o.sponsored) && state.paymasterCalls.length >= 2, "gas was sponsored through the relay");
 
+  // ---- staking is blocked until the wallet has a recovery method
   await alice.fill("#stake", "10");
   await alice.selectOption("#bestof", "3");
+  await alice.click('[data-act="create"]');
+  await waitText(alice, "#msg", /Create offer failed.*Add a recovery method first/);
+  check((await alice.locator("#recovery").count()) === 1 && state.ops.length === 1, "creating an offer is refused until the wallet has a recovery method, and nothing was sent");
+
+  // ---- add email recovery: the email key becomes the wallet's second owner
+  const recoveryStart = Date.now();
+  await alice.click("#recover-email");
+  await alice.fill("#em-email", "alice@example.com");
+  await alice.click("#emailsend");
+  await alice.waitForSelector("#em-code");
+  await alice.fill("#em-code", mails[mails.length - 1].code);
+  await alice.click("#emailverify");
+  await alice.waitForSelector("#em-pass2");
+  await alice.fill("#em-pass", "blue lamp river stone");
+  await alice.fill("#em-pass2", "blue lamp river stone");
+  await alice.click("#emailfinish");
+  try {
+    await alice.waitForSelector("#recovery-ok", { timeout: 60_000 });
+  } catch (e) {
+    const err = await alice.textContent("#emailerror").catch(() => null);
+    const msg = await alice.textContent("#msg").catch(() => null);
+    throw new Error(`recovery did not finish. The form says: ${err ?? "(no error)"}; the page says: ${msg ?? "(nothing)"}. ${(e as Error).message.split("\n")[0]}`);
+  }
+  check(state.adminCalls.includes("addOwnerAddress") && (state.owners.get(addrA.toLowerCase())?.length ?? 0) === 2, "the wallet now has two owners: the passkey and the email key");
+  check(state.ops[state.ops.length - 1].signatureValid && state.ops[state.ops.length - 1].sponsored, "adding the recovery owner was a sponsored operation signed by the passkey");
+
   await alice.click('[data-act="create"]');
   await msgDone(alice, "Create offer");
   const last = state.ops[state.ops.length - 1];
@@ -238,6 +252,33 @@ try {
   await waitText(B.page, "#addr", new RegExp(`${addrA}.*passkey wallet`, "i"));
   check(true, "on a fresh device, 'Sign in with passkey' finds the same wallet address");
   await alice.screenshot({ path: join(SHOTS, "passkey-1-wallet.png") });
+
+  // ---- lose the passkey entirely: the email opens the very same wallet, and signs for it as its second owner
+  const wait = Math.max(0, recoveryStart + 21_000 - Date.now());
+  if (wait) await new Promise((r) => setTimeout(r, wait)); // one code every 20 seconds per address
+  const C = await openContext(); // a fresh device with no passkey at all
+  await C.page.goto(`${webUrl}/`);
+  await C.page.evaluate(() => localStorage.clear());
+  await C.page.goto(`${webUrl}/`);
+  await C.page.waitForSelector("#emailopen");
+  await C.page.click("#emailopen");
+  await C.page.fill("#em-email", "alice@example.com");
+  await C.page.click("#emailsend");
+  await C.page.waitForSelector("#em-code");
+  await C.page.fill("#em-code", mails[mails.length - 1].code);
+  await C.page.click("#emailverify");
+  await C.page.waitForSelector("#em-pass");
+  await C.page.fill("#em-pass", "blue lamp river stone");
+  await C.page.click("#emailfinish");
+  await waitText(C.page, "#addr", new RegExp(`${addrA}.*email wallet`, "i"));
+  check(true, "signing in with the recovery email opens the same wallet address, with no passkey");
+  await waitText(C.page, "#recovery-ok", /Recovery method added/);
+  await C.page.click('[data-act="game"][data-game="jinx"]');
+  await C.page.waitForSelector('[data-act="game"][data-game="jinx"].primary');
+  await C.page.click('[data-act="mint"]');
+  await waitText(C.page, "#tokens", /^2008\.3/);
+  const lastOp = state.ops[state.ops.length - 1];
+  check(lastOp.sender === addrA.toLowerCase() && lastOp.signatureValid, "an operation signed by the email key (owner 2) was accepted for the same wallet");
 
   console.log(`\nPASSKEY WALLET UI TEST PASSED (screenshots in ${SHOTS})`);
 } catch (e) {

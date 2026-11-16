@@ -163,7 +163,7 @@ test("the first registration of a passkey wins and cannot be replaced", () => {
   assert.equal(reg.register(ID, KEY), "created");
   assert.equal(reg.register(ID, KEY), "same");
   assert.equal(reg.register(ID, "0x" + "cd".repeat(64)), "conflict");
-  assert.equal(reg.get(ID), KEY);
+  assert.equal(reg.get(ID)?.publicKey, KEY);
 });
 
 test("malformed registrations are refused", () => {
@@ -180,7 +180,7 @@ test("the directory survives a restart and skips damaged lines", () => {
   new PasskeyRegistry(dir).register(ID, KEY);
   writeFileSync(join(dir, "passkeys.jsonl"), '{"id":"' + ID + '","publicKey":"' + KEY + '"}\nnot json\n{"id":"bad"}\n', "utf8");
   const again = new PasskeyRegistry(dir);
-  assert.equal(again.get(ID), KEY);
+  assert.equal(again.get(ID)?.publicKey, KEY);
   assert.equal(again.size, 1);
 });
 
@@ -204,4 +204,91 @@ test("when the provider answers with an HTTP error, the browser gets that messag
   } finally {
     console.warn = realWarn;
   }
+});
+
+// ----------------------------------------------------------------------------------------------- recovery rules
+
+const recoveryAbi = parseAbi(["function addOwnerAddress(address owner)", "function addOwnerPublicKey(bytes32 x, bytes32 y)", "function removeOwnerAtIndex(uint256 index, bytes owner)", "function createOffer(uint256 stake, uint64 expiry, address key, uint8 bestOf)", "function challenge(uint256 id, address key)", "function mint(address to, uint256 amount)"]);
+const callTo = (target: Address, fn: string, args: unknown[]) => ({ target, data: encodeFunctionData({ abi: recoveryAbi, functionName: fn as never, args: args as never }) });
+
+test("a wallet may add an owner to itself (its recovery method), and nothing else about itself", () => {
+  const add = batch([callTo(WALLET, "addOwnerAddress", [OTHER])]);
+  assert.equal(checkSponsorable(op(add), ALLOWED, [ESCROW]).ok, true);
+  const addKey = batch([callTo(WALLET, "addOwnerPublicKey", [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`])]);
+  assert.equal(checkSponsorable(op(addKey), ALLOWED, [ESCROW]).ok, true);
+  const remove = batch([callTo(WALLET, "removeOwnerAtIndex", [0n, "0x"])]);
+  assert.deepEqual(checkSponsorable(op(remove), ALLOWED, [ESCROW]), { ok: false, reason: "wallet administration is not sponsored, except adding a recovery method" });
+  const other = batch([callTo(OTHER, "addOwnerAddress", [OTHER])]);
+  assert.equal(checkSponsorable(op(other), ALLOWED, [ESCROW]).ok, false, "adding an owner to some other contract is not sponsored");
+});
+
+test("only the calls that lock a stake are marked as staking", () => {
+  const offer = checkSponsorable(op(batch([callTo(TOKEN, "mint", [WALLET, 1n]), callTo(ESCROW, "createOffer", [10n, 1n, OTHER, 3])])), ALLOWED, [ESCROW]);
+  assert.equal(offer.ok && offer.locksStake, true);
+  const challenge = checkSponsorable(op(batch([callTo(ESCROW, "challenge", [1n, OTHER])])), ALLOWED, [ESCROW]);
+  assert.equal(challenge.ok && challenge.locksStake, true);
+  const mint = checkSponsorable(op(batch([callTo(TOKEN, "mint", [WALLET, 1n])])), ALLOWED, [ESCROW]);
+  assert.equal(mint.ok && mint.locksStake, false);
+});
+
+function relayWithRecovery(protectedWallets: Set<string>, requireRecovery = true) {
+  const sent: string[] = [];
+  const fetchFn = (async (_u: string, init: { body: string }) => {
+    sent.push(JSON.parse(init.body).method);
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0xok" }), { status: 200 });
+  }) as unknown as typeof fetch;
+  return {
+    sent,
+    aa: createAa({
+      bundlerUrl: "https://b.example",
+      paymasterUrl: "https://p.example",
+      allowedTargets: ALLOWED,
+      stakeTargets: [ESCROW],
+      walletProtected: requireRecovery ? async (w) => protectedWallets.has(w.toLowerCase()) : undefined,
+      fetchFn,
+    }),
+  };
+}
+const stakeOp = () => op(batch([callTo(TOKEN, "mint", [WALLET, 1n]), callTo(ESCROW, "createOffer", [10n, 1n, OTHER, 3])]));
+
+test("staking is not sponsored for a wallet with no recovery method, and is once it has one", async () => {
+  const none = relayWithRecovery(new Set());
+  const refused = JSON.parse((await none.aa.paymaster(rpc("pm_getPaymasterData", [stakeOp(), "0xep", "0x14a34", {}]), "1.2.3.4")).body);
+  assert.match(refused.error.message, /add a recovery method/);
+  assert.equal(none.sent.length, 0, "nothing reached the sponsor");
+  const stub = JSON.parse((await none.aa.paymaster(rpc("pm_getPaymasterStubData", [stakeOp(), "0xep", "0x14a34", {}]), "1.2.3.4")).body);
+  assert.match(stub.error.message, /add a recovery method/, "even the sizing call is refused, so the player learns early");
+
+  const protectedOne = relayWithRecovery(new Set([WALLET.toLowerCase()]));
+  const ok = JSON.parse((await protectedOne.aa.paymaster(rpc("pm_getPaymasterData", [stakeOp(), "0xep", "0x14a34", {}]), "1.2.3.4")).body);
+  assert.equal(ok.result, "0xok");
+});
+
+test("minting and adding the recovery method are sponsored even before a wallet is protected", async () => {
+  const none = relayWithRecovery(new Set());
+  const mint = op(batch([callTo(TOKEN, "mint", [WALLET, 1n])]));
+  const add = op(batch([callTo(WALLET, "addOwnerAddress", [OTHER])]));
+  for (const o of [mint, add]) {
+    const r = JSON.parse((await none.aa.paymaster(rpc("pm_getPaymasterData", [o, "0xep", "0x14a34", {}]), "5.6.7.8")).body);
+    assert.equal(r.result, "0xok");
+  }
+});
+
+test("with the rule switched off, staking is sponsored for any wallet", async () => {
+  const off = relayWithRecovery(new Set(), false);
+  const r = JSON.parse((await off.aa.paymaster(rpc("pm_getPaymasterData", [stakeOp(), "0xep", "0x14a34", {}]), "9.9.9.9")).body);
+  assert.equal(r.result, "0xok");
+});
+
+test("a recovery passkey is registered with the wallet it belongs to, and that cannot be changed later", () => {
+  const reg = new PasskeyRegistry(mkdtempSync(join(tmpdir(), "playpot-pk-")));
+  const wallet = { address: "0x00000000000000000000000000000000000000a1", ownerIndex: 1 };
+  assert.equal(reg.register(ID, KEY, wallet), "created");
+  assert.deepEqual(reg.get(ID), { publicKey: KEY, wallet });
+  assert.equal(reg.register(ID, KEY, wallet), "same");
+  assert.equal(reg.register(ID, KEY, { ...wallet, ownerIndex: 2 }), "conflict");
+  assert.equal(reg.register(ID, KEY), "conflict", "it cannot be turned into a plain passkey either");
+  const reg2 = new PasskeyRegistry(mkdtempSync(join(tmpdir(), "playpot-pk-")));
+  assert.equal(reg2.register(ID, KEY, { address: "nope", ownerIndex: 1 }), "invalid");
+  assert.equal(reg2.register(ID, KEY, { address: wallet.address, ownerIndex: 999 }), "invalid");
 });

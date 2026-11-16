@@ -35,6 +35,8 @@ export interface ServerConfig {
   emailFrom?: string; // a sender address verified in Brevo, for example no-reply@playpot.gg
   emailFromName?: string;
   mailer?: Mailer; // tests inject one
+  requireRecovery?: boolean; // default true: gas is not sponsored for staking from a wallet that has no recovery method
+  walletProtected?: (wallet: Address) => Promise<boolean>; // tests inject one; the default reads the wallet's owner count from the chain
   proxyRpc?: boolean; // expose a restricted /rpc proxy so browsers need no direct chain access (local chains)
 }
 
@@ -90,12 +92,31 @@ export async function startServer(cfg: ServerConfig) {
     }
   });
 
+  /** A wallet is protected once it has a second owner. Read from the wallet itself, and remembered for a few seconds. */
+  const protectedCache = new Map<string, { at: number; ok: boolean }>();
+  async function walletHasRecovery(wallet: Address): Promise<boolean> {
+    const hit = protectedCache.get(wallet.toLowerCase());
+    if (hit && Date.now() - hit.at < 5_000) return hit.ok;
+    let ok = false;
+    try {
+      const n = (await chain.pub.readContract({ address: wallet, abi: [{ type: "function", name: "ownerCount", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }], functionName: "ownerCount" } as never)) as bigint;
+      ok = n >= 2n;
+    } catch {
+      ok = false; // not deployed yet, or not a wallet
+    }
+    protectedCache.set(wallet.toLowerCase(), { at: Date.now(), ok });
+    if (protectedCache.size > 20_000) protectedCache.clear();
+    return ok;
+  }
+
   // Passkey wallets: relay to the bundler and gas sponsor, and keep the public key directory.
   const aa = createAa({
     bundlerUrl: cfg.bundlerUrl,
     paymasterUrl: cfg.paymasterUrl,
     paymasterContext: cfg.paymasterContext,
     allowedTargets: [cfg.escrow, tokenAddr, ...(jinxChain ? [jinxChain.escrow, jinxToken!] : [])],
+    stakeTargets: [cfg.escrow, ...(jinxChain ? [jinxChain.escrow] : [])],
+    walletProtected: cfg.requireRecovery === false ? undefined : (cfg.walletProtected ?? walletHasRecovery),
   });
   const passkeys = new PasskeyRegistry(cfg.dataDir);
   const registrations = new Map<string, number>();
@@ -333,16 +354,16 @@ export async function startServer(cfg: ServerConfig) {
         registrations.set(ip, n);
         if (registrations.size > 20_000) registrations.clear();
         if (n > 60) return json(429, { error: "too many registrations from this address" });
-        const body = JSON.parse(await readBody(req)) as { id?: unknown; publicKey?: unknown };
-        const result = passkeys.register(body.id, body.publicKey);
+        const body = JSON.parse(await readBody(req)) as { id?: unknown; publicKey?: unknown; wallet?: unknown };
+        const result = passkeys.register(body.id, body.publicKey, body.wallet);
         if (result === "invalid") return json(400, { error: "bad passkey" });
         if (result === "conflict") return json(409, { error: "that passkey id is already registered with a different key" });
         if (result === "full") return json(507, { error: "directory full" });
         return json(200, { ok: true, existed: result === "same" });
       }
       if (url.pathname.startsWith("/passkey/") && req.method === "GET") {
-        const key = passkeys.get(decodeURIComponent(url.pathname.slice("/passkey/".length)));
-        return key ? json(200, { publicKey: key }) : json(404, { error: "unknown passkey" });
+        const found = passkeys.get(decodeURIComponent(url.pathname.slice("/passkey/".length)));
+        return found ? json(200, found) : json(404, { error: "unknown passkey" });
       }
       if (url.pathname === "/rpc" && cfg.proxyRpc && req.method === "POST") {
         const body = JSON.parse(await readBody(req));

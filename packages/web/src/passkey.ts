@@ -6,10 +6,12 @@ import { createBundlerClient, createPaymasterClient, createWebAuthnCredential, t
 import { http, toHex, type Address, type Hex, type LocalAccount, type PublicClient } from "viem";
 import { WebAuthnP256 } from "ox";
 import type { BatchLog, Eip1193 } from "./wallet.ts";
+import { isOwnerAt, ownerBytesOfPasskey, type WalletRef } from "./recovery.ts";
 
 export interface PasskeyRecord {
   id: string;
   publicKey: Hex; // P-256 public key, x then y (64 bytes)
+  wallet?: WalletRef; // set for a recovery passkey: the wallet it is an extra owner of (otherwise the wallet made from it)
 }
 
 const STORE = "playpot:passkey";
@@ -20,7 +22,9 @@ export const rpIdFor = (hostname: string): string => (hostname === "playpot.gg" 
 export function savedPasskey(): PasskeyRecord | null {
   try {
     const rec = JSON.parse(localStorage.getItem(STORE) ?? "null") as PasskeyRecord | null;
-    return rec && typeof rec.id === "string" && /^0x[0-9a-fA-F]{128}$/.test(rec.publicKey) ? rec : null;
+    const w = rec?.wallet;
+    const refOk = w === undefined || (/^0x[0-9a-fA-F]{40}$/.test(w.address) && Number.isInteger(w.ownerIndex) && w.ownerIndex >= 0);
+    return rec && typeof rec.id === "string" && /^0x[0-9a-fA-F]{128}$/.test(rec.publicKey) && refOk ? rec : null;
   } catch {
     return null;
   }
@@ -44,8 +48,8 @@ const friendly = (e: unknown): Error => {
   return e instanceof Error ? e : new Error(String(e));
 };
 
-/** Makes a new passkey on this device and records its public key in the directory. */
-export async function createPasskey(serverUrl: string): Promise<PasskeyRecord> {
+/** Makes a new passkey on this device and records its public key in the directory. A recovery passkey names its wallet. */
+export async function createPasskey(serverUrl: string, wallet?: WalletRef): Promise<PasskeyRecord> {
   let cred;
   try {
     cred = await createWebAuthnCredential({
@@ -55,7 +59,7 @@ export async function createPasskey(serverUrl: string): Promise<PasskeyRecord> {
   } catch (e) {
     throw friendly(e);
   }
-  const rec: PasskeyRecord = { id: cred.id, publicKey: cred.publicKey };
+  const rec: PasskeyRecord = { id: cred.id, publicKey: cred.publicKey, ...(wallet ? { wallet } : {}) };
   const res = await fetch(`${serverUrl}/passkey`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(rec) });
   if (!res.ok) throw new Error(`could not register the passkey (${res.status})`);
   save(rec);
@@ -79,14 +83,17 @@ export async function signInWithPasskey(serverUrl: string): Promise<PasskeyRecor
   }
   const id = signed.raw.id;
   let publicKey = known && known.id === id ? known.publicKey : undefined;
+  let wallet = known && known.id === id ? known.wallet : undefined;
   if (!publicKey) {
     const res = await fetch(`${serverUrl}/passkey/${encodeURIComponent(id)}`);
     if (!res.ok) throw new Error("That passkey is not registered with PlayPot. Create a new passkey wallet instead.");
-    publicKey = ((await res.json()) as { publicKey: Hex }).publicKey;
+    const found = (await res.json()) as { publicKey: Hex; wallet?: WalletRef };
+    publicKey = found.publicKey;
+    wallet = found.wallet;
   }
   const ok = WebAuthnP256.verify({ challenge, metadata: signed.metadata, publicKey: point(publicKey), signature: signed.signature });
   if (!ok) throw new Error("The passkey's signature did not match the key on record.");
-  const rec = { id, publicKey };
+  const rec: PasskeyRecord = { id, publicKey, ...(wallet ? { wallet } : {}) };
   save(rec);
   return rec;
 }
@@ -151,15 +158,28 @@ export interface WalletEnv {
   sponsored: boolean;
 }
 
-/** The smart account for a passkey. */
-export const openPasskeyWallet = (rec: PasskeyRecord, o: WalletEnv): Promise<OpenedWallet> =>
-  openSmartWallet(toWebAuthnAccount({ credential: { id: rec.id, publicKey: rec.publicKey }, rpId: rpIdFor(location.hostname) }), o);
+/**
+ * The smart account for a passkey: the wallet made from it, or, for a recovery passkey, the wallet it was added to. What
+ * a directory or a saved record says is checked against the wallet itself before it is trusted.
+ */
+export async function openPasskeyWallet(rec: PasskeyRecord, o: WalletEnv): Promise<OpenedWallet> {
+  if (rec.wallet && !(await isOwnerAt(o.publicClient, rec.wallet, ownerBytesOfPasskey(rec.publicKey)))) {
+    throw new Error("That passkey is not (yet) an owner of the wallet it points to.");
+  }
+  return openSmartWallet(toWebAuthnAccount({ credential: { id: rec.id, publicKey: rec.publicKey }, rpId: rpIdFor(location.hostname) }), o, rec.wallet);
+}
 
 /** Builds the smart account for an owner (a passkey, or a key from an email wallet) and a bundler client that sends through this site's relay. */
-export async function openSmartWallet(owner: WebAuthnAccount | LocalAccount, o: WalletEnv): Promise<OpenedWallet> {
+export async function openSmartWallet(owner: WebAuthnAccount | LocalAccount, o: WalletEnv, wallet?: WalletRef): Promise<OpenedWallet> {
   let account;
   try {
-    account = await toCoinbaseSmartAccount({ client: o.publicClient, owners: [owner as never], version: "1.1" });
+    account = await toCoinbaseSmartAccount({
+      client: o.publicClient,
+      owners: [owner as never],
+      version: "1.1",
+      // a recovery owner signs for a wallet that was made from another owner: say which wallet, and which owner it is
+      ...(wallet ? { address: wallet.address, ownerIndex: wallet.ownerIndex } : {}),
+    });
   } catch (e) {
     throw new Error(`could not work out the wallet address on this network (${(e as Error).message.slice(0, 120)})`);
   }

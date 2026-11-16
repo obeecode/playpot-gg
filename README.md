@@ -288,6 +288,36 @@ $env:BUNDLER_URL = "..."                    # as in the section above
 
 In Brevo, verify the sender and authenticate the `playpot.gg` domain (Brevo gives you DNS records to add in Cloudflare, with the proxy off), or codes may land in spam. Codes are limited to one per 20 seconds and six an hour per address, 20 an hour per internet address, five tries per code. `npm run ui-test:email` runs the whole flow against a captured mailer and checks what the server stored.
 
+## Recovery is mandatory for smart wallets
+
+A passkey or email wallet has one way in until it is given a second one. Lose the only passkey, or forget the only passphrase, and nobody can restore the wallet, so **the app will not let a smart wallet stake until it has a recovery method**:
+
+- A **passkey wallet** gets an **email key** as its second owner ("Add email recovery"): email code, a passphrase for the new key, then one passkey prompt to add it. Later, signing in with that email opens the same wallet from any device, with no passkey at all.
+- An **email wallet** gets a **passkey** as its second owner ("Add passkey recovery"). Later, "Sign in with passkey" on any device opens the same wallet.
+- The wallet needs to exist on-chain first (its first transaction, such as minting test tokens, creates it).
+- It is checked against the wallet itself (`ownerCount()` of the Coinbase Smart Wallet), not against anything the app remembers, and anything a directory or saved record claims about which wallet a recovery key belongs to is checked against the wallet's owner list before it is trusted.
+- It is enforced in the app (create offer and challenge are refused with an explanation) and by the relay: **gas is not sponsored for staking from a wallet with fewer than two owners**, whatever client sends it. Switch the relay rule off with `requireRecovery: false` (tests only). It cannot be enforced on-chain, because the escrow cannot see wallet owners: someone paying their own gas with their own client can still stake from a single-owner wallet, at their own risk.
+- The relay sponsors adding an owner to the wallet itself, and nothing else about the wallet (it will not sponsor removing owners or any other wallet administration).
+- An interrupted attempt can be finished: the encrypted recovery key is saved before the wallet is changed, and a recovery passkey is reused if it was made but not yet added.
+
+`npm run ui-test:passkey` and `npm run ui-test:email` cover both directions, including a device that has only the recovery method.
+
+## Backups
+
+The server keeps everything that cannot be recreated in the `data` folder: match logs, `passkeys.jsonl` (the directory that lets a passkey on a new device find its wallet), `vaults.jsonl` (the encrypted email-wallet keys) and `email-pepper.key` (the secret that makes those entries findable again). If that folder is lost, email wallets cannot be opened on a new device and a passkey on a new device cannot find its wallet, even with the right passphrase. (Funds are not lost for anyone who still has their device, but many will not.)
+
+```powershell
+npm run backup                                   # copies data\ to backups\playpot-data-<date and time>\
+$env:BACKUP_DIR = "D:\PlayPotBackups"             # optional: somewhere that is not this computer
+npm run backup
+```
+
+Keep `email-pepper.key` with `vaults.jsonl` (the backup warns if the pepper is missing), keep the copies private, and keep at least one copy off this computer. To restore: stop the server, copy the files from a backup folder back into `data\`, start the server. `data/` and `backups/` are excluded from git. A daily copy on Windows:
+
+```powershell
+schtasks /create /sc daily /st 21:00 /tn PlayPotBackup /tr "cmd /c cd /d C:\Users\ob\playpot-gg && npm run backup"
+```
+
 ## Known limits of v0
 
 - **Mock referee.** One plain key signs as the referee. Phase 2 moves it into an attested enclave; until then, the referee can only affect settlement by colluding with a player, and the dispute path above overturns that.
