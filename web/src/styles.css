@@ -326,3 +326,5 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .sidebar { border-right-color: transparent; }
 .sidebar::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 1px; pointer-events: none;
   background: linear-gradient(180deg, #c9c4f0 0%, rgba(180,174,224,.6) 22%, rgba(160,156,232,.22) 60%, rgba(160,156,232,.04) 100%); box-shadow: 0 0 8px rgba(160,156,232,.55); }
+.tb-logo::after { height: 1px; box-shadow: 0 0 4px rgba(160,156,232,.45), 0 1px 0 #050507; }
+.tb-logo::before { bottom: 1px; }
