@@ -238,3 +238,6 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .stat { flex: 0 0 84px; }
 .row-card .btn-primary { min-width: 120px; }
 .sb-list.is-plain { background: none; border: 0; padding: 0 4px; }
+.sb-item { background: #141519; border: 1px solid var(--line); color: var(--text-2); }
+.sb-item.active { background: #1e1f27; border-color: var(--line-strong); }
+.sb-list.is-plain { gap: 8px; }
