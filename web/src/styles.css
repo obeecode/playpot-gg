@@ -339,3 +339,4 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
   background: linear-gradient(180deg, #c9c4f0 0%, rgba(180,174,224,.5) 50%, rgba(160,156,232,0) 100%); filter: drop-shadow(0 0 4px rgba(160,156,232,.6)); }
 .shell { min-height: calc(100vh - 73px); }
 @media (max-width: 900px) { .shell::before { display: none; } }
+.tb-logo { background: radial-gradient(150px 46px at 45% 100%, rgba(190,184,255,.18) 0%, rgba(160,156,232,0) 100%), linear-gradient(90deg, rgba(16,17,21,0) 45%, rgba(16,17,21,.5) 100%), linear-gradient(180deg, #16151e 0%, #1a1826 30%, #221e35 65%, #26223c 100%); }
