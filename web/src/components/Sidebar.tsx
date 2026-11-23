@@ -42,7 +42,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     <>
       {open && <div className="sb-backdrop" onClick={onClose} aria-hidden="true" />}
       <aside className={'sidebar' + (open ? ' is-open' : '')} aria-label="Main navigation">
-        <NavLink to="/" className="logo sb-logo" onClick={onClose}>PlayPot<span>.GG</span></NavLink>
 
         <div className="sb-tiles">
           <NavLink to="/lobby" className="sb-tile sb-tile-a" onClick={onClose}>
