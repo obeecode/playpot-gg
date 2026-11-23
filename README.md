@@ -336,7 +336,7 @@ Engineering is not the hard part. A stake on your own game may count as betting 
 
 A real-time fighting game from the gameplay-core project, served by this server at `/g/fight/` so two players can try it through the same address as the other games. It is a **test build**: no wallet, no stake, and the original game's files are never part of this repository.
 
-Point the server at the game's files on your machine, then start it as usual (`npm run live`):
+The easy way on Windows: from the playpot-gg folder run `powershell -ExecutionPolicy Bypass -File .\start-fight.ps1`. It downloads `gameplay-core` and the assets repo next to playpot-gg, keeps your private settings in `live.env.ps1` (git-ignored), and starts the server. The manual way:
 
 ```powershell
 $env:FIGHT_DIR="C:\path\to\gameplay-core"          # a checkout of the gameplay-core repository

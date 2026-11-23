@@ -9,3 +9,4 @@ deployments/local.json
 data/
 deploy/.env
 backups/
+live.env.ps1
