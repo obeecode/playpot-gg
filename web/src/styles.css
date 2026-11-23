@@ -361,3 +361,7 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .sb-item:hover, .sb-item.active { background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,0)); border-color: rgba(255,255,255,.22);
   box-shadow: inset 0 0 6px 0 rgba(255,255,255,.3); color: #fff; }
 .sb-item:hover::after, .sb-item.active::after { opacity: 1; }
+.sb-item, .sb-game { box-shadow: inset 0 0 6px 0 rgba(255,255,255,.06); }
+.sb-item::after, .sb-game::after { opacity: .18; }
+.sb-item:hover, .sb-item.active { border-color: rgba(255,255,255,.16); box-shadow: inset 0 0 6px 0 rgba(255,255,255,.15); }
+.sb-item:hover::after, .sb-item.active::after { opacity: .5; }
