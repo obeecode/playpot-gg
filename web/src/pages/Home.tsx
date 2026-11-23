@@ -2,12 +2,18 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp } from '../lib/context';
 import type { Offer } from '../lib/types';
-import { GAMES } from '../games/registry';
 
 const STEPS = [
   { t: 'Pick an offer', d: 'Every offer is already funded by the player who made it, so there is nobody to wait for.' },
   { t: 'Match the pot', d: 'One click locks your matching stake in escrow. You sign once, then your moves are silent.' },
   { t: 'Winner keeps it', d: 'The winner claims the pot. A draw refunds both stakes in full.' },
+];
+
+const CATS = [
+  { k: 'a', t: 'TIC-TAC-TOE', s: 'Live on testnet', g: 'X', to: '/lobby' },
+  { k: 'b', t: 'CHESS', s: 'Coming next', g: '\u265B', to: '/' },
+  { k: 'c', t: 'OPEN OFFERS', s: 'Funded and waiting', g: '\u21C5', to: '/lobby' },
+  { k: 'd', t: 'MY GAMES', s: 'Your offers and results', g: '\u2605', to: '/p/you' },
 ];
 
 export function Home() {
@@ -18,17 +24,34 @@ export function Home() {
   return (
     <>
       <main className="page page-home">
-        <section className="hero">
-          <span className="pill"><span className="dot" aria-hidden="true" />Testnet live · {GAMES['tic-tac-toe'].title}</span>
-          <h1 className="display">Challenge anyone.<br />Winner keeps the pot.</h1>
-          <p className="lede">PlayPot.GG is a simple arena: players, games, and a pre-set pot for every game. Find an offer, match the stake, and play for it.</p>
-          <div className="cta-row">
-            <Link to="/lobby" className="btn btn-primary">Browse open offers</Link>
-            <a href="#how" className="btn btn-ghost">How it works</a>
+        <section className="hero-card">
+          <div className="hero-art" aria-hidden="true" />
+          <div className="hero-board" aria-hidden="true">
+            {['X','O','','','X','O','O','','X'].map((m, i) => <div key={i} data-m={m}>{m}</div>)}
+          </div>
+          <div className="hero-shade" aria-hidden="true" />
+          <div className="hero-body">
+            <span className="hero-badge"><span className="dot" aria-hidden="true" />Testnet live</span>
+            <h1 className="hero-title">Challenge anyone. <span>Winner keeps</span> the pot.</h1>
+            <p className="hero-text">Pick a funded offer, match the stake and play. One signature to start, then your moves are silent.</p>
+            <div className="cta-row">
+              <Link to="/lobby" className="btn btn-glow">Browse open offers</Link>
+              <a href="#how" className="btn btn-ghost">How it works</a>
+            </div>
           </div>
         </section>
 
-        <section style={{ marginTop: 56 }}>
+        <section className="cat-row">
+          {CATS.map((c) => (
+            <Link key={c.t} to={c.to} className={'cat-tile cat-' + c.k}>
+              <div><div className="cat-title">{c.t}</div><div className="cat-sub">{c.s}</div></div>
+              <span className="cat-glyph" aria-hidden="true">{c.g}</span>
+              <span className="cat-go" aria-hidden="true">&#8250;</span>
+            </Link>
+          ))}
+        </section>
+
+        <section style={{ marginTop: 40 }}>
           <div className="section-head"><h2>Open offers right now</h2><Link to="/lobby" className="link-gold">See all</Link></div>
           <div className="offer-scroller">
             {offers === null && <p className="muted">Loading offers…</p>}
@@ -59,19 +82,6 @@ export function Home() {
           </div>
         </section>
 
-        <section style={{ marginTop: 48 }}>
-          <div className="section-head"><h2>Games</h2></div>
-          <div className="table" role="table" aria-label="Games">
-            <div className="tr" role="row"><span role="columnheader">Game</span><span role="columnheader">Status</span><span role="columnheader">Format</span></div>
-            {Object.values(GAMES).map((g) => (
-              <div className="tr" role="row" key={g.id}>
-                <strong role="cell">{g.title}</strong>
-                <span role="cell"><span className={'badge ' + (g.available ? 'live' : 'soon')}>{g.available ? 'Live on testnet' : 'Coming next'}</span></span>
-                <span role="cell" className="muted">{g.available ? 'Single game, winner takes the pot' : 'After the core mechanics are proven'}</span>
-              </div>
-            ))}
-          </div>
-        </section>
       </main>
       <footer className="footer">Base Sepolia testnet. Test tokens only, no real money. Real-money play is off until it is cleared for specific jurisdictions.</footer>
     </>

@@ -241,3 +241,36 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .sb-item { background: #141519; border: 1px solid var(--line); color: var(--text-2); }
 .sb-item.active { background: #1e1f27; border-color: var(--line-strong); }
 .sb-list.is-plain { gap: 8px; }
+
+/* top bar, reference style */
+.header { margin: 16px 24px 0; padding: 10px 12px; border-radius: 16px; border: 1px solid var(--line); background: linear-gradient(180deg, #15161c 0%, #101115 100%); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06); }
+.btn-glow { color: var(--bg); background: linear-gradient(180deg, #c9c4f0 0%, #8680b0 100%); box-shadow: 0 0 22px rgba(134, 128, 176, 0.5); }
+.page-home { max-width: 1280px; padding: 20px 24px 40px; }
+.hero-card { position: relative; min-height: 380px; border-radius: 24px; overflow: hidden; border: 1px solid var(--line-strong); background: #14131f; }
+.hero-art, .hero-shade { position: absolute; inset: 0; }
+.hero-art { background:
+  conic-gradient(from 200deg at 72% 38%, rgba(160,156,232,0) 0deg, rgba(160,156,232,.35) 12deg, rgba(160,156,232,0) 24deg, rgba(160,156,232,.22) 40deg, rgba(160,156,232,0) 54deg, rgba(160,156,232,.3) 72deg, rgba(160,156,232,0) 90deg, rgba(160,156,232,0) 360deg),
+  radial-gradient(460px 320px at 72% 45%, rgba(160,156,232,.55) 0%, rgba(67,70,101,.35) 45%, rgba(20,19,31,0) 80%),
+  radial-gradient(600px 300px at 100% 100%, rgba(59,56,83,.8), rgba(20,19,31,0) 70%); }
+.hero-shade { background:
+  linear-gradient(90deg, #0c0d0f 0%, rgba(12,13,15,.94) 28%, rgba(12,13,15,.55) 50%, rgba(12,13,15,0) 72%),
+  linear-gradient(180deg, rgba(12,13,15,.55) 0%, rgba(12,13,15,0) 22%, rgba(12,13,15,0) 70%, rgba(12,13,15,.85) 100%); }
+.hero-board { position: absolute; right: 7%; top: 40px; width: 300px; height: 300px; transform: rotate(-8deg); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.hero-board div { display: flex; align-items: center; justify-content: center; border-radius: 16px; background: rgba(255,255,255,.05); border: 1px solid rgba(201,196,240,.25); font: 700 64px/1 var(--font-display); color: #fff; text-shadow: 0 0 24px rgba(255,255,255,.35); }
+.hero-board div[data-m='O'] { color: #c9c4f0; text-shadow: 0 0 28px rgba(160,156,232,.8); }
+.hero-body { position: relative; padding: 44px 44px 40px; max-width: 560px; display: flex; flex-direction: column; gap: 18px; }
+.hero-badge { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 10px; background: rgba(134,128,176,.18); border: 1px solid #4a4378; font-size: 13px; font-weight: 600; }
+.hero-title { margin: 0; font: 700 46px/1.08 var(--font-display); letter-spacing: -.5px; text-transform: uppercase; }
+.hero-title span { color: #c9c4f0; text-shadow: 0 0 24px rgba(160,156,232,.6); }
+.hero-text { margin: 0; color: var(--text-2); max-width: 440px; }
+.cat-row { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 16px; }
+.cat-tile { position: relative; flex: 1 1 220px; min-width: 0; min-height: 150px; border-radius: 18px; padding: 18px; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid; }
+.cat-title { font: 700 22px var(--font-display); letter-spacing: .5px; }
+.cat-sub { color: var(--text-2); font-size: 13px; margin-top: 2px; }
+.cat-glyph { position: absolute; right: 16px; bottom: 8px; font: 700 80px/1 var(--font-display); color: rgba(255,255,255,.9); }
+.cat-go { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,.12); display: flex; align-items: center; justify-content: center; }
+.cat-a { border-color: #4a4378; background: radial-gradient(220px 160px at 85% 75%, rgba(160,156,232,.7), transparent 70%), linear-gradient(135deg, #14151b, #2a2546); }
+.cat-b { border-color: #2f3b5c; background: radial-gradient(220px 160px at 85% 75%, rgba(143,180,255,.45), transparent 70%), linear-gradient(135deg, #14151b, #1b2236); }
+.cat-c { border-color: #2c4a33; background: radial-gradient(220px 160px at 85% 75%, rgba(157,215,165,.45), transparent 70%), linear-gradient(135deg, #14151b, #17241d); }
+.cat-d { border-color: #5a3a34; background: radial-gradient(220px 160px at 85% 75%, rgba(255,170,140,.4), transparent 70%), linear-gradient(135deg, #14151b, #2a1c1b); }
+@media (max-width: 760px) { .hero-board { opacity: .35; right: -60px; } .hero-title { font-size: 34px; } .hero-body { padding: 28px 22px; } }
