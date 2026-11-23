@@ -329,3 +329,4 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .tb-logo::after { height: 1px; box-shadow: 0 0 4px rgba(160,156,232,.45), 0 1px 0 #050507; }
 .tb-logo::before { bottom: 1px; }
 .page-home { max-width: none; margin: 0; padding: 10px 28px 20px; }
+.hero-card { margin-top: 20px; }
