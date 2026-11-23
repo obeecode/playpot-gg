@@ -13,7 +13,6 @@ export function App() {
     <div className="shell">
       <Sidebar open={menu} onClose={() => setMenu(false)} />
       <div className="shell-main">
-        <div className="testnet-strip">Base Sepolia testnet. Test tokens only, no real money.</div>
         <Header onMenu={() => setMenu(true)} />
         <Routes>
           <Route path="/" element={<Home />} />
