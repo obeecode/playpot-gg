@@ -23,7 +23,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
   );
 }
 
-function Group({ icon, label, defaultOpen = true, active = false, children }: { icon: string; label: string; defaultOpen?: boolean; active?: boolean; children: React.ReactNode }) {
+function Group({ icon, label, defaultOpen = true, active = false, plain = false, children }: { icon: string; label: string; defaultOpen?: boolean; active?: boolean; plain?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="sb-group">
@@ -32,7 +32,7 @@ function Group({ icon, label, defaultOpen = true, active = false, children }: { 
         <span className="sb-label">{label}</span>
         <span className={'sb-chev' + (open ? ' is-open' : '')}><Icon name="chevron" size={16} /></span>
       </button>
-      {open && <div className="sb-list">{children}</div>}
+      {open && <div className={'sb-list' + (plain ? ' is-plain' : '')}>{children}</div>}
     </div>
   );
 }
@@ -52,7 +52,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           </NavLink>
         </div>
 
-        <Group icon="grid" label="Game hub" active>
+        <Group icon="grid" label="Game hub" active plain>
           <NavLink to="/" end className="sb-item" onClick={onClose}><Icon name="home" /><span>Home</span></NavLink>
           <NavLink to="/lobby" className="sb-item" onClick={onClose}><Icon name="tag" /><span>Open offers</span></NavLink>
           <NavLink to="/match/demo" className="sb-item" onClick={onClose}><Icon name="play" /><span>Live match</span></NavLink>

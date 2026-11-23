@@ -237,3 +237,4 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .row-card { gap: 12px 16px; }
 .stat { flex: 0 0 84px; }
 .row-card .btn-primary { min-width: 120px; }
+.sb-list.is-plain { background: none; border: 0; padding: 0 4px; }
