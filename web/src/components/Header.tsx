@@ -30,7 +30,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
       <div className="tb-mid">
         <nav className="tb-tabs" aria-label="Games">
           <NavLink to="/lobby" className="tb-tab is-on"><I d={P.grid} />Tic-tac-toe</NavLink>
-          <span className="tb-tab" aria-disabled="true"><I d={P.crown} />Chess</span>
+          <NavLink to="/lobby" className="tb-tab"><I d={P.crown} />Games</NavLink>
           <NavLink to="/p/you" className="tb-tab"><I d={P.clock} />History</NavLink>
         </nav>
         <div className="tb-right">
