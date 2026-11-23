@@ -10,6 +10,7 @@ import { checkFightFiles, createFight, fightFromEnv, FIGHT_PREFIX, type Fight } 
 const MAIN = 'const a = "https://be.counterpicklabs.com"; const w = "wss://be.counterpicklabs.com"; new WebSocket(x + location.host + "/ws?room=" + r); link = (base || location.origin) + "/?room=" + room;';
 
 let root: string, server: Server, fight: Fight, base: string;
+const logged: string[] = [];
 
 before(async () => {
   root = mkdtempSync(join(tmpdir(), "fight-"));
@@ -25,7 +26,7 @@ before(async () => {
   writeFileSync(join(ref, "TEMP_REF__site", "assets", "misc", "TEMP_REF__fighter.atlas"), "atlas");
   writeFileSync(join(ref, "TEMP_REF__assets", "packed_sprites", "TEMP_REF__ui.json"), "{}");
   writeFileSync(join(root, "secret.txt"), "do not serve");
-  fight = createFight({ gameDir: game, refDir: ref, keepAliveMs: 60_000 });
+  fight = createFight({ gameDir: game, refDir: ref, keepAliveMs: 60_000, statsMs: 100, log: (l) => logged.push(l) });
   server = createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://x");
     if (!fight.http(req, res, u.pathname, u.search)) {
@@ -135,6 +136,18 @@ describe("fight relay", () => {
     await until(() => h.got.includes("sleft"));
     h.ws.close();
     await until(() => fight.rooms() === 0);
+  });
+  it("logs how each player\'s connection behaves while a room is playing", async () => {
+    const h = await open("ROOM04", "host");
+    const g = await open("ROOM04", "guest");
+    await until(() => g.got.includes("sready"));
+    for (let i = 0; i < 5; i++) {
+      h.ws.send("r1:x");
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    await until(() => logged.some((l) => l.includes("ROOM04") && /host \d+ msg\/s, longest silence \d+ ms, ping/.test(l) && l.includes("guest")));
+    h.ws.close();
+    g.ws.close();
   });
   it("tells a guest when nobody is hosting and refuses a second player in the same role", async () => {
     const g = await open("NOHOST", "guest");

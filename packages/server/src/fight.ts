@@ -17,6 +17,8 @@ export interface FightOptions {
   mainFile?: string; // the build to serve, relative to fork-core/src; default main.ws1.js (the build with online play)
   maxMessageBytes?: number;
   keepAliveMs?: number;
+  statsMs?: number; // how often a room's timing summary is logged (default 5000)
+  log?: (line: string) => void;
 }
 
 const MIME: Record<string, string> = {
@@ -138,7 +140,10 @@ export function createFight(o: FightOptions) {
 
   // ---- relay ----
   const wss = new WebSocketServer({ noServer: true, maxPayload });
-  const rooms = new Map<string, { host?: WebSocket; guest?: WebSocket }>();
+  const rooms = new Map<string, { host?: WebSocket; guest?: WebSocket; stats?: ReturnType<typeof setInterval> }>();
+  const log = o.log ?? ((l: string) => console.log(l));
+  /** Timing per player: how many messages arrived, the longest silence between two of them, and the last ping round trip. */
+  const timing = new WeakMap<WebSocket, { n: number; last: number; maxGap: number; rtt: number; pingAt: number }>();
   const alive = new WeakMap<WebSocket, boolean>();
   const timer = setInterval(() => {
     for (const ws of wss.clients) {
@@ -158,7 +163,12 @@ export function createFight(o: FightOptions) {
 
   function admit(ws: WebSocket, code: string, role: "host" | "guest") {
     alive.set(ws, true);
-    ws.on("pong", () => alive.set(ws, true));
+    const t = { n: 0, last: 0, maxGap: 0, rtt: -1, pingAt: 0 };
+    timing.set(ws, t);
+    ws.on("pong", () => {
+      alive.set(ws, true);
+      if (t.pingAt) t.rtt = Date.now() - t.pingAt;
+    });
     const peer = () => {
       const r = rooms.get(code);
       return r ? (role === "host" ? r.guest : r.host) : undefined;
@@ -182,6 +192,10 @@ export function createFight(o: FightOptions) {
     const mine = room;
     ws.on("message", (raw, isBinary) => {
       if (isBinary || rooms.get(code) !== mine) return;
+      const now = Date.now();
+      if (t.last) t.maxGap = Math.max(t.maxGap, now - t.last);
+      t.last = now;
+      t.n++;
       peer()?.send(raw.toString());
     });
     ws.on("close", () => {
@@ -190,8 +204,11 @@ export function createFight(o: FightOptions) {
       r[role] = undefined;
       const other = role === "host" ? r.guest : r.host;
       if (other && other.readyState === other.OPEN) other.send("sleft");
-      if (!r.host && !r.guest) rooms.delete(code);
-      else if (role === "host") {
+      if (!r.host && !r.guest) {
+        clearInterval(r.stats);
+        rooms.delete(code);
+      } else if (role === "host") {
+        clearInterval(r.stats);
         rooms.delete(code);
         other?.close(1000);
       }
@@ -199,6 +216,29 @@ export function createFight(o: FightOptions) {
     if (room.host && room.guest) {
       room.host.send("sready");
       room.guest.send("sready");
+      const pair = room;
+      // While two players are in a room, log how the connection behaves every few seconds. A long gap or a slow ping here
+      // is what a freeze looks like from the server's side, and it shows whose link it is.
+      pair.stats = setInterval(() => {
+        const line: string[] = [];
+        for (const side of ["host", "guest"] as const) {
+          const w = pair[side];
+          const x = w && timing.get(w);
+          if (!w || !x) continue;
+          const secs = (o.statsMs ?? 5000) / 1000;
+          line.push(`${side} ${(x.n / secs).toFixed(0)} msg/s, longest silence ${x.maxGap} ms, ping ${x.rtt < 0 ? "?" : x.rtt + " ms"}`);
+          x.n = 0;
+          x.maxGap = 0;
+          x.pingAt = Date.now();
+          try {
+            w.ping();
+          } catch {
+            /* closing */
+          }
+        }
+        if (line.length) log(`[fight] room ${code}: ${line.join(" | ")}`);
+      }, o.statsMs ?? 5000);
+      pair.stats.unref();
     }
   }
 
@@ -224,6 +264,7 @@ export function createFight(o: FightOptions) {
       clearInterval(timer);
       for (const ws of wss.clients) ws.terminate();
       wss.close();
+      for (const r of rooms.values()) clearInterval(r.stats);
       rooms.clear();
     },
   };
