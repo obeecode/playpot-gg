@@ -331,3 +331,22 @@ schtasks /create /sc daily /st 21:00 /tn PlayPotBackup /tr "cmd /c cd /d C:\User
 ## Legal
 
 Engineering is not the hard part. A stake on your own game may count as betting (UK), online money games are banned in India, and US state law varies. **No real money until counsel has cleared specific jurisdictions.**
+
+## Fight (test build)
+
+A real-time fighting game from the gameplay-core project, served by this server at `/g/fight/` so two players can try it through the same address as the other games. It is a **test build**: no wallet, no stake, and the original game's files are never part of this repository.
+
+Point the server at the game's files on your machine, then start it as usual (`npm run live`):
+
+```powershell
+$env:FIGHT_DIR="C:\path\to\gameplay-core"          # a checkout of the gameplay-core repository
+$env:FIGHT_REF="C:\path\to\counterpick-ref"        # the folder that holds TEMP_REF__site and TEMP_REF__assets
+npm run live
+```
+
+- With both set, the lobby shows a **Fight** card. Open it, press *host online*, and send the invite link to your opponent.
+- Without them the game is off and nothing else changes. The server says why if a folder is wrong.
+- `FIGHT_MAIN` picks another build from `fork-core/src` (default `main.ws1.js`, the build with online play; `main.js` in that repository is the local-only build).
+- The relay at `/g/fight/ws` only forwards text between the two players of a room. It looks at nothing and keeps nothing.
+- `npm run ui-test:fight` plays a short match between two browsers through these paths. It needs `FIGHT_DIR` and `FIGHT_REF` (and `CHROMIUM` for the browser path) and skips without them.
+- Serving the original game's files counts as hosting them: use this only for your own test, and strip them (remove every `TEMP_REF__` file) before anything is shared.

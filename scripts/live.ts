@@ -7,10 +7,13 @@ import { existsSync } from "node:fs";
 import { createPublicClient, http, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { startServer } from "../packages/server/src/main.ts";
+import { fightFromEnv } from "../packages/server/src/fight.ts";
 import { deployContracts, deployJinxV2 } from "./lib.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const existing = Boolean(process.env.ESCROW && process.env.REFEREE_PK);
+const fightEnv = fightFromEnv(); // FIGHT_DIR + FIGHT_REF switch on the Fight test game at /g/fight
+if (fightEnv.problem) console.warn(`Fight game is off: ${fightEnv.problem}`);
 
 if (!existing && !existsSync("contracts/out/PotEscrow.sol/PotEscrow.json")) {
   console.error("Contracts are not built. Run:  cd contracts && forge build");
@@ -41,6 +44,7 @@ if (existing) {
     dataDir: process.env.DATA_DIR ?? "data",
     resultWaitMs: Number(process.env.RESULT_WAIT_MS ?? 15000),
     webDir: "packages/web/dist",
+    fight: fightEnv.options,
     bundlerUrl: process.env.BUNDLER_URL, // switches passkey wallets on
     paymasterUrl: process.env.PAYMASTER_URL, // also pays players' gas
     paymasterContext: process.env.PAYMASTER_CONTEXT ? JSON.parse(process.env.PAYMASTER_CONTEXT) : undefined,
@@ -106,6 +110,7 @@ if (existing) {
     dataDir: process.env.DATA_DIR ?? "data",
     resultWaitMs: Number(process.env.RESULT_WAIT_MS ?? 15000),
     webDir: "packages/web/dist",
+    fight: fightEnv.options,
     proxyRpc: true,
   });
 }

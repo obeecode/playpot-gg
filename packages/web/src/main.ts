@@ -84,6 +84,7 @@ interface Config {
   jinx?: { escrow: Address; token: Address; limits?: Limits };
   aa?: { enabled: boolean; sponsored: boolean }; // passkey wallets: available on this server, and whether gas is paid for players
   email?: { enabled: boolean }; // email sign-in is switched on
+  fight?: { path: string }; // the Fight test game is served by this server, at this path
 }
 
 interface EmailFlow {
@@ -1525,6 +1526,9 @@ function render() {
   if (!S.jview && !S.view) {
     html += getStarted(cfg);
     html += `<section id="practice-card"><h2>Practice</h2><div class="row"><select id="pbestof"><option value="3" ${S.practiceBestOf === 3 ? "selected" : ""}>Best of 3</option><option value="5" ${S.practiceBestOf === 5 ? "selected" : ""}>Best of 5</option></select><button class="primary" data-act="practice" id="practice">Play JINX against the bot</button><span class="dim">no wallet, no stake</span></div></section>`;
+  }
+  if (cfg.fight && !S.jview && !S.view) {
+    html += `<section id="fight-card"><h2>Fight <span class="dim">&middot; test build</span></h2><div class="row"><a class="primary" id="fight" href="${esc(S.serverUrl + cfg.fight.path)}" target="_blank" rel="noopener" style="padding:8px 14px;border-radius:8px;text-decoration:none">Open Fight</a><span class="dim">Press &ldquo;host online&rdquo; in the game and send the invite link to your opponent. No wallet, no stake.</span></div></section>`;
   }
   html += `<section><h2>Wallet</h2>`;
   if (!S.addr) {

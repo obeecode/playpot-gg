@@ -10,6 +10,7 @@ import { Chain } from "./chain.ts";
 import { Snapshots } from "./state.ts";
 import { Room } from "./room.ts";
 import { JinxHost } from "./jinxHost.ts";
+import { createFight, fightFromEnv, FIGHT_PREFIX, type FightOptions } from "./fight.ts";
 import { createAa } from "./aa.ts";
 import { PasskeyRegistry } from "./passkeys.ts";
 import { EmailAuth, brevoMailer, type Mailer } from "./email.ts";
@@ -37,6 +38,7 @@ export interface ServerConfig {
   mailer?: Mailer; // tests inject one
   requireRecovery?: boolean; // default true: gas is not sponsored for staking from a wallet that has no recovery method
   walletProtected?: (wallet: Address) => Promise<boolean>; // tests inject one; the default reads the wallet's owner count from the chain
+  fight?: FightOptions; // serve the Fight test game at /g/fight from folders on this machine (see fight.ts)
   proxyRpc?: boolean; // expose a restricted /rpc proxy so browsers need no direct chain access (local chains)
 }
 
@@ -292,10 +294,12 @@ export async function startServer(cfg: ServerConfig) {
       req.on("error", fail);
     });
 
+  const fight = cfg.fight ? createFight(cfg.fight) : undefined;
   const http = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     cors(res);
     if (req.method === "OPTIONS") return void res.writeHead(204).end();
     const url = new URL(req.url ?? "/", "http://x");
+    if (fight?.http(req, res, url.pathname, url.search)) return;
     const json = (code: number, body: unknown) => {
       res.writeHead(code, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
@@ -313,6 +317,7 @@ export async function startServer(cfg: ServerConfig) {
           jinx: jinxChain ? { escrow: jinxChain.escrow, token: jinxToken, limits: await jinxLimits() } : undefined,
           aa: { enabled: aa.enabled, sponsored: aa.sponsored },
           email: { enabled: !!email },
+          fight: fight ? { path: FIGHT_PREFIX + "/" } : undefined,
         });
       }
       if (url.pathname.startsWith("/email/") || url.pathname === "/vault") {
@@ -403,7 +408,11 @@ export async function startServer(cfg: ServerConfig) {
     }
   });
 
-  const wss = new WebSocketServer({ server: http });
+  const wss = new WebSocketServer({ noServer: true });
+  http.on("upgrade", (req, socket, head) => {
+    if (fight?.upgrade(req, socket, head)) return;
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  });
   wss.on("connection", (ws) => {
     ws.on("message", (raw) => {
       let msg: ClientMsg;
@@ -435,6 +444,7 @@ export async function startServer(cfg: ServerConfig) {
       timers.forEach(clearTimeout);
       clearInterval(jinxTimer);
       jinxHost?.close();
+      fight?.close();
       wss.clients.forEach((c) => c.terminate());
       await new Promise<void>((r) => http.close(() => r()));
     },
@@ -448,7 +458,10 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
     if (!v) throw new Error(`missing env ${k}`);
     return v;
   };
+  const fightEnv = fightFromEnv();
+  if (fightEnv.problem) console.warn(`Fight game is off: ${fightEnv.problem}`);
   const s = await startServer({
+    fight: fightEnv.options,
     rpcUrl: process.env.RPC_URL ?? "http://127.0.0.1:8545",
     publicRpcUrl: process.env.PUBLIC_RPC_URL,
     escrow: need("ESCROW") as Address,

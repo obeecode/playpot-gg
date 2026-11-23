@@ -29,6 +29,7 @@
     "fixtures:jinx": "node scripts/gen-jinx-fixtures.ts",
     "ui-test:jinx": "node scripts/ui-test-jinx.ts",
     "ui-test:practice": "node scripts/ui-test-practice.ts",
+    "ui-test:fight": "node scripts/ui-test-fight.ts",
     "ui-test:smart": "node scripts/ui-test-smart.ts",
     "ui-test:passkey": "node scripts/ui-test-passkey.ts",
     "ui-test:email": "node scripts/ui-test-email.ts",
