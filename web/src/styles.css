@@ -310,3 +310,13 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
   .tb-tabs, .tb-soft:not(.tb-sq) { display: none; } .sidebar { top: 0; height: 100vh; }
 }
 .tb-tab.active { padding: 0 16px; font-weight: 700; color: var(--bg); background: linear-gradient(180deg, #d9d4ff 0%, #9a93d6 55%, #7a73b4 100%); box-shadow: 0 0 20px rgba(154,147,214,.55), inset 0 1px 0 rgba(255,255,255,.6); }
+
+/* logo cell underline, reference style: bright centre, fades out past the divider */
+.topbar { border-bottom: 1px solid #060608; box-shadow: inset 0 -1px 0 #1e1f27; }
+.tb-logo { position: relative; z-index: 1; border-right: 0; box-shadow: none;
+  background: radial-gradient(150px 46px at 45% 100%, rgba(160,156,232,.42) 0%, rgba(160,156,232,0) 100%), linear-gradient(180deg, #111117 0%, #17161f 45%, #24203a 100%); }
+.tb-logo::before { content: ''; position: absolute; right: 0; top: 0; bottom: 2px; width: 1px;
+  background: linear-gradient(180deg, rgba(160,156,232,.12) 0%, rgba(160,156,232,.45) 55%, #c9c4f0 100%); box-shadow: 0 0 8px rgba(160,156,232,.6); }
+.tb-logo::after { content: ''; position: absolute; left: 0; right: -72px; bottom: 0; height: 2px;
+  background: linear-gradient(90deg, rgba(134,128,176,.35) 0%, #b4aee0 22%, #eeebff 42%, #b4aee0 62%, rgba(160,156,232,.55) 79%, rgba(160,156,232,0) 100%);
+  box-shadow: 0 0 10px 1px rgba(160,156,232,.65), 0 -4px 14px rgba(160,156,232,.35), 0 1px 0 #050507; }
