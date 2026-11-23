@@ -320,3 +320,4 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .tb-logo::after { content: ''; position: absolute; left: 0; right: -72px; bottom: 0; height: 2px;
   background: linear-gradient(90deg, rgba(134,128,176,.35) 0%, #b4aee0 22%, #eeebff 42%, #b4aee0 62%, rgba(160,156,232,.55) 79%, rgba(160,156,232,0) 100%);
   box-shadow: 0 0 10px 1px rgba(160,156,232,.65), 0 -4px 14px rgba(160,156,232,.35), 0 1px 0 #050507; }
+.page-home { padding: 10px 12px 20px; }
