@@ -50,11 +50,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             <span className="sb-tile-label">Lobby</span>
             <span className="sb-tile-go"><Icon name="arrow" size={12} /></span>
           </NavLink>
-          <NavLink to="/p/you" className="sb-tile sb-tile-b" onClick={onClose}>
-            <span className="sb-tile-ico"><Icon name="user" size={26} /></span>
-            <span className="sb-tile-label">My games</span>
-            <span className="sb-tile-go"><Icon name="arrow" size={12} /></span>
-          </NavLink>
         </div>
 
         <Group icon="grid" label="Game hub" active>
