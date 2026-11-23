@@ -13,7 +13,8 @@ export function Header() {
     <header className="header">
       <NavLink to="/" className="logo">PlayPot<span>.GG</span></NavLink>
       <nav className="nav">
-        <NavLink to="/" end>Lobby</NavLink>
+        <NavLink to="/" end>Home</NavLink>
+        <NavLink to="/lobby">Lobby</NavLink>
         <NavLink to="/p/you">My games</NavLink>
         <NavLink to="/match/demo">Matches</NavLink>
       </nav>

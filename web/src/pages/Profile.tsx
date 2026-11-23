@@ -23,7 +23,7 @@ export function Profile() {
   if (!p) return <main className="page"><p className="muted">Loading…</p></main>;
   return (
     <main className="page page-narrow">
-      <Link to="/" className="muted small">Back to lobby</Link>
+      <Link to="/lobby" className="muted small">Back to lobby</Link>
       <section className="profile-head">
         <div className="avatar avatar-lg" aria-hidden="true">{p.handle[0].toUpperCase()}</div>
         <div>

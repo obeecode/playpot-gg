@@ -83,7 +83,7 @@ export function Match() {
                   {m.settlement === 'disputed' && <div className="note warn" role="status">Funds are frozen. The contract will replay both players' signed moves on-chain and decide.</div>}
                 </>
               )}
-              <Link to="/" className="btn btn-ghost">Back to lobby</Link>
+              <Link to="/lobby" className="btn btn-ghost">Back to lobby</Link>
             </div>
           )}
           <div className="card">
