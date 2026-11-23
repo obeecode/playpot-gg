@@ -349,3 +349,6 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .logo-img { height: 42px; }
 @media (max-width: 900px) { .logo-img { height: 32px; } }
 .sidebar { background: #101115; }
+/* gold primary buttons */
+.tb-tab.is-on, .tb-tab.active, .tb-glow, .btn-glow { color: #1a1005; background: linear-gradient(180deg, #ffedb0 0%, #f7c04a 48%, #e3901f 100%);
+  box-shadow: 0 0 20px rgba(245,184,61,.45), inset 0 1px 0 rgba(255,255,255,.7), inset 0 -2px 0 rgba(150,70,10,.35); }
