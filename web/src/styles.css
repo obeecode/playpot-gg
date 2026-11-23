@@ -346,3 +346,5 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .tb-logo::before { background: linear-gradient(180deg, rgba(224,138,30,.1) 0%, rgba(240,170,60,.5) 55%, #ffd983 100%); box-shadow: 0 0 8px rgba(245,184,61,.55); }
 .tb-logo::after { background: linear-gradient(90deg, rgba(168,85,15,.4) 0%, #e08a1e 20%, #ffe9a8 42%, #f5b83d 62%, rgba(224,138,30,.6) 79%, rgba(224,138,30,0) 100%); box-shadow: 0 0 5px rgba(245,184,61,.5), 0 1px 0 #050507; }
 .shell::before { background: linear-gradient(180deg, #ffd983 0%, rgba(240,170,60,.55) 50%, rgba(224,138,30,0) 100%); filter: drop-shadow(0 0 4px rgba(245,184,61,.6)); }
+.logo-img { height: 42px; }
+@media (max-width: 900px) { .logo-img { height: 32px; } }
