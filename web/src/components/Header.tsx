@@ -14,6 +14,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
       <button className="btn btn-ghost menu-btn" onClick={onMenu} aria-label="Open menu">Menu</button>
       <NavLink to="/" className="logo header-logo">PlayPot<span>.GG</span></NavLink>
       <div className="header-right">
+        <button className="btn btn-ghost" onClick={() => window.location.reload()} aria-label="Reload the app">Reload app</button>
         <strong>{account ? `${account.balance} tPOT` : '…'}</strong>
         <button className="btn btn-ghost" onClick={mint} disabled={busy}>{busy ? 'Minting…' : 'Mint test tokens'}</button>
         <button className="btn btn-chip">{account?.short ?? 'Connect wallet'}</button>
