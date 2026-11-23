@@ -31,7 +31,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
         <nav className="tb-tabs" aria-label="Games">
           <NavLink to="/lobby" className="tb-tab is-on"><I d={P.grid} />Tic-tac-toe</NavLink>
           <NavLink to="/lobby" className="tb-tab"><I d={P.crown} />Games</NavLink>
-          <NavLink to="/p/you" className="tb-tab"><I d={P.clock} />History</NavLink>
+          <NavLink to="/match/demo" className="tb-tab"><I d={P.clock} />Challenges</NavLink>
         </nav>
         <div className="tb-right">
           <div className="tb-bal">
