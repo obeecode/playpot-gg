@@ -365,3 +365,7 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .sb-item::after, .sb-game::after { opacity: .18; }
 .sb-item:hover, .sb-item.active { border-color: rgba(255,255,255,.16); box-shadow: inset 0 0 6px 0 rgba(255,255,255,.15); }
 .sb-item:hover::after, .sb-item.active::after { opacity: .5; }
+.sb-item, .sb-game { box-shadow: inset 0 0 6px 0 rgba(255,255,255,.03); }
+.sb-item::after, .sb-game::after { opacity: .09; }
+.sb-item:hover, .sb-item.active { box-shadow: inset 0 0 6px 0 rgba(255,255,255,.08); }
+.sb-item:hover::after, .sb-item.active::after { opacity: .25; }
