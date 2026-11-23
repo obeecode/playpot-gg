@@ -25,7 +25,7 @@ export function Header({ onMenu }: { onMenu: () => void }) {
     <header className="topbar">
       <div className="tb-logo">
         <button className="tb-menu" onClick={onMenu} aria-label="Open menu"><I d={P.menu} s={20} /></button>
-        <Link to="/" className="logo">PlayPot<span>.GG</span></Link>
+        <Link to="/" className="logo"><img src="/playpot-logo.png" alt="Playpot" className="logo-img" /></Link>
       </div>
       <div className="tb-mid">
         <nav className="tb-tabs" aria-label="Main">
