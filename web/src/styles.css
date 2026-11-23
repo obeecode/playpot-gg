@@ -190,3 +190,6 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .hero h1.display { display: block; width: fit-content; max-width: 100%; }
 .offer-card .who { flex: 0 0 auto; }
 .pill { margin-top: 8px; }
+
+.head-actions { display: flex; align-items: center; gap: 12px; }
+.btn-sm { min-height: 44px; padding: 0 14px; font-size: 14px; }

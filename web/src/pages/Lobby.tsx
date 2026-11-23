@@ -13,9 +13,14 @@ export function Lobby() {
   const [stake, setStake] = useState('10');
   const [published, setPublished] = useState<Offer | null>(null);
   const [error, setError] = useState('');
+  const [reloading, setReloading] = useState(false);
 
   const load = useCallback(async () => setOffers(await client.listOffers('tic-tac-toe')), [client]);
   useEffect(() => { void load(); }, [load]);
+  const reload = async () => {
+    setReloading(true);
+    try { await load(); } finally { setReloading(false); }
+  };
 
   const publish = async () => {
     setError('');
@@ -32,7 +37,7 @@ export function Lobby() {
       <section className="col-main">
         <h1 className="display">Pick a game. Match the pot.<br />Winner keeps it.</h1>
         <p className="lede">Every offer below is already funded. Challenge one and your matching stake locks in escrow, then the game starts.</p>
-        <div className="section-head"><h2>Open offers</h2><span className="muted small">{GAMES['tic-tac-toe'].title}</span></div>
+        <div className="section-head"><h2>Open offers</h2><div className="head-actions"><span className="muted small">{GAMES['tic-tac-toe'].title}</span><button className="btn btn-ghost btn-sm" onClick={reload} disabled={reloading}>{reloading ? 'Reloading…' : 'Reload'}</button></div></div>
         <div className="stack">
           {offers === null && <p className="muted">Loading offers…</p>}
           {offers?.length === 0 && <p className="muted">No open offers yet. Create the first one.</p>}
