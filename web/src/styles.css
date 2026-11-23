@@ -323,3 +323,6 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .page-home { padding: 10px 12px 20px; }
 .tb-logo { background: radial-gradient(150px 46px at 45% 100%, rgba(190,184,255,.35) 0%, rgba(160,156,232,0) 100%), linear-gradient(90deg, rgba(16,17,21,0) 45%, rgba(16,17,21,.5) 100%), linear-gradient(180deg, #1b1928 0%, #252038 30%, #332c55 65%, #3b3363 100%); }
 .page-home { padding-left: 0; padding-right: 0; }
+.sidebar { border-right-color: transparent; }
+.sidebar::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 1px; pointer-events: none;
+  background: linear-gradient(180deg, #c9c4f0 0%, rgba(180,174,224,.6) 22%, rgba(160,156,232,.22) 60%, rgba(160,156,232,.04) 100%); box-shadow: 0 0 8px rgba(160,156,232,.55); }
