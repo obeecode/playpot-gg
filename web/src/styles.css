@@ -309,3 +309,4 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
   .tb-logo { flex: 0 0 auto; padding: 0 12px; } .tb-menu { display: inline-flex; align-items: center; justify-content: center; }
   .tb-tabs, .tb-soft:not(.tb-sq) { display: none; } .sidebar { top: 0; height: 100vh; }
 }
+.tb-tab.active { padding: 0 16px; font-weight: 700; color: var(--bg); background: linear-gradient(180deg, #d9d4ff 0%, #9a93d6 55%, #7a73b4 100%); box-shadow: 0 0 20px rgba(154,147,214,.55), inset 0 1px 0 rgba(255,255,255,.6); }

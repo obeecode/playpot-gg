@@ -3,7 +3,7 @@ import { Link, NavLink } from 'react-router-dom';
 import { useApp } from '../lib/context';
 
 const P = {
-  grid: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',
+  home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
   crown: 'M4 18h16M5 18l-1-10 5 4 3-7 3 7 5-4-1 10',
   clock: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2',
   gear: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z',
@@ -28,8 +28,8 @@ export function Header({ onMenu }: { onMenu: () => void }) {
         <Link to="/" className="logo">PlayPot<span>.GG</span></Link>
       </div>
       <div className="tb-mid">
-        <nav className="tb-tabs" aria-label="Games">
-          <NavLink to="/lobby" className="tb-tab is-on"><I d={P.grid} />Tic-tac-toe</NavLink>
+        <nav className="tb-tabs" aria-label="Main">
+          <NavLink to="/" end className="tb-tab"><I d={P.home} />Home</NavLink>
           <NavLink to="/lobby" className="tb-tab"><I d={P.crown} />Games</NavLink>
           <NavLink to="/match/demo" className="tb-tab"><I d={P.clock} />Challenges</NavLink>
         </nav>
