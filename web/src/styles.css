@@ -348,3 +348,4 @@ select, input { width: 100%; min-height: 44px; border-radius: 8px; border: 1px s
 .shell::before { background: linear-gradient(180deg, #ffd983 0%, rgba(240,170,60,.55) 50%, rgba(224,138,30,0) 100%); filter: drop-shadow(0 0 4px rgba(245,184,61,.6)); }
 .logo-img { height: 42px; }
 @media (max-width: 900px) { .logo-img { height: 32px; } }
+.sidebar { background: #101115; }
