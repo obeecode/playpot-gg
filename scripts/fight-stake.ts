@@ -31,6 +31,10 @@ if (cmd === "wallet") {
   console.log(`address:     ${privateKeyToAccount(key).address}\nprivate key: ${key}\n\nKeep the private key to yourself. Send only the address to whoever is funding you.`);
   process.exit(0);
 }
+if (!["offer", "challenge", "link", "status", "concede", "dispute", "claim"].includes(cmd ?? "")) {
+  console.log(`usage: ${self} wallet | offer <stake> | challenge <id> | link <id> | status <id> | concede <id> | dispute <id> | claim`);
+  process.exit(2);
+}
 const rpc = process.env.RPC_URL ?? "https://sepolia.base.org";
 const escrow = need("FIGHT_ESCROW") as Address;
 const pub = createPublicClient({ transport: http(rpc) });
