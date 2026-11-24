@@ -2,11 +2,13 @@
 // two players. The game's files are never part of this repository: FIGHT_DIR points at a gameplay-core checkout and FIGHT_REF at
 // the folder holding TEMP_REF__site and TEMP_REF__assets. The relay is blind: it forwards text frames between the two players of
 // a room and keeps nothing after the room closes.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, join, resolve, sep } from "node:path";
 import type { Duplex } from "node:stream";
+import type { Address, LocalAccount } from "viem";
 import { WebSocketServer, type WebSocket } from "ws";
+import { FightLog, GUEST, HOST, recoverJoin, type FightLogFile } from "./fightLog.ts";
 
 export const FIGHT_PREFIX = "/g/fight";
 export const FIGHT_WS_PATH = `${FIGHT_PREFIX}/ws`;
@@ -19,6 +21,10 @@ export interface FightOptions {
   keepAliveMs?: number;
   statsMs?: number; // how often a room's timing summary is logged (default 5000)
   log?: (line: string) => void;
+  referee?: LocalAccount; // with this, every room is recorded in a hash chain that the referee signs when the match ends
+  logDir?: string; // where finished records are written (the record is also served at /g/fight/log/<id>)
+  requireAuth?: boolean; // players must join with a wallet signature (see joinMessage in fightLog.ts); otherwise it is optional
+  now?: () => number;
 }
 
 const MIME: Record<string, string> = {
@@ -50,6 +56,10 @@ export function createFight(o: FightOptions) {
   const mainPath = join(o.gameDir, "fork-core", "src", o.mainFile ?? "main.ws1.js");
   const roots = [join(o.refDir, "TEMP_REF__site"), join(o.refDir, "TEMP_REF__assets")];
   const maxPayload = o.maxMessageBytes ?? 1024 * 1024;
+  const now = o.now ?? Date.now;
+  /** Finished match records, newest last, by id. */
+  const finished = new Map<string, FightLogFile>();
+  const FINISHED_KEPT = 200;
 
   /** A request path (after the prefix) to a file in the reference folders, which carry a TEMP_REF__ label on every file name. */
   function findFile(rel: string): string | null {
@@ -103,6 +113,11 @@ export function createFight(o: FightOptions) {
       send(res, body !== undefined ? 200 : 404, body ?? "{}", MIME[".json"]);
       return true;
     }
+    if (rel.startsWith("/log/")) {
+      const f = finished.get(rel.slice("/log/".length));
+      send(res, f ? 200 : 404, f ? JSON.stringify(f) : '{"error":"no such record"}', MIME[".json"]);
+      return true;
+    }
     if (rel.startsWith("/wds/")) {
       send(res, 404, "{}", MIME[".json"]);
       return true;
@@ -144,7 +159,14 @@ export function createFight(o: FightOptions) {
 
   // ---- relay ----
   const wss = new WebSocketServer({ noServer: true, maxPayload });
-  const rooms = new Map<string, { host?: WebSocket; guest?: WebSocket; stats?: ReturnType<typeof setInterval> }>();
+  interface Room {
+    host?: WebSocket;
+    guest?: WebSocket;
+    addr: { host?: Address; guest?: Address };
+    log?: FightLog;
+    stats?: ReturnType<typeof setInterval>;
+  }
+  const rooms = new Map<string, Room>();
   const log = o.log ?? ((l: string) => console.log(l));
   /** Timing per player: how many messages arrived, the longest silence between two of them, and the last ping round trip. */
   const timing = new WeakMap<WebSocket, { n: number; last: number; maxGap: number; rtt: number; pingAt: number }>();
@@ -165,7 +187,28 @@ export function createFight(o: FightOptions) {
   }, o.keepAliveMs ?? 20_000);
   timer.unref();
 
-  function admit(ws: WebSocket, code: string, role: "host" | "guest") {
+  /** Signs and stores the match record, if there is one. */
+  function closeRecord(r: Room, reason: string) {
+    const record = r.log;
+    r.log = undefined;
+    if (!record || !o.referee || record.entries.length === 0) return;
+    const referee = o.referee;
+    void record.finalize(referee, reason, now()).then((file) => {
+      finished.set(record.room, file);
+      while (finished.size > FINISHED_KEPT) finished.delete(finished.keys().next().value as string);
+      if (o.logDir) {
+        try {
+          mkdirSync(o.logDir, { recursive: true });
+          writeFileSync(join(o.logDir, `${record.room}.json`), JSON.stringify(file));
+        } catch (e) {
+          log(`[fight] could not write the record for ${record.room}: ${(e as Error).message}`);
+        }
+      }
+      log(`[fight] record ${record.room}: ${file.head.count} messages over ${Math.round(file.head.durationMs / 1000)} s, ${reason}`);
+    });
+  }
+
+  function admit(ws: WebSocket, code: string, role: "host" | "guest", addr?: Address) {
     alive.set(ws, true);
     const t = { n: 0, last: 0, maxGap: 0, rtt: -1, pingAt: 0 };
     timing.set(ws, t);
@@ -184,7 +227,7 @@ export function createFight(o: FightOptions) {
       return;
     }
     if (!room) {
-      room = {};
+      room = { addr: {} };
       rooms.set(code, room);
     }
     if (room[role]) {
@@ -193,19 +236,23 @@ export function createFight(o: FightOptions) {
       return;
     }
     room[role] = ws;
+    room.addr[role] = addr;
     const mine = room;
     ws.on("message", (raw, isBinary) => {
       if (isBinary || rooms.get(code) !== mine) return;
-      const now = Date.now();
-      if (t.last) t.maxGap = Math.max(t.maxGap, now - t.last);
-      t.last = now;
+      const arrived = Date.now();
+      if (t.last) t.maxGap = Math.max(t.maxGap, arrived - t.last);
+      t.last = arrived;
       t.n++;
-      peer()?.send(raw.toString());
+      const text = raw.toString();
+      mine.log?.append(role === "host" ? HOST : GUEST, text, now()); // recorded before it is forwarded, on the server's clock
+      peer()?.send(text);
     });
     ws.on("close", () => {
       const r = rooms.get(code);
       if (!r || r[role] !== ws) return;
       r[role] = undefined;
+      closeRecord(r, `${role} left`);
       const other = role === "host" ? r.guest : r.host;
       if (other && other.readyState === other.OPEN) other.send("sleft");
       if (!r.host && !r.guest) {
@@ -221,6 +268,7 @@ export function createFight(o: FightOptions) {
       room.host.send("sready");
       room.guest.send("sready");
       const pair = room;
+      if (o.referee) pair.log = new FightLog(`${code}-${now()}`, now(), pair.addr.host ?? null, pair.addr.guest ?? null);
       // While two players are in a room, log how the connection behaves every few seconds. A long gap or a slow ping here
       // is what a freeze looks like from the server's side, and it shows whose link it is.
       pair.stats = setInterval(() => {
@@ -256,7 +304,19 @@ export function createFight(o: FightOptions) {
       socket.destroy();
       return true;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => admit(ws, code, role));
+    const sig = u.searchParams.get("sig");
+    const claimed = u.searchParams.get("addr");
+    const refuse = () => {
+      socket.write("HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n");
+      socket.destroy();
+    };
+    void (async () => {
+      let who: Address | undefined;
+      if (sig && /^0x[0-9a-fA-F]{130}$/.test(sig)) who = await recoverJoin(code, role, sig as `0x${string}`);
+      if (who && claimed && who.toLowerCase() !== claimed.toLowerCase()) who = undefined;
+      if ((o.requireAuth || sig) && !who) return refuse();
+      wss.handleUpgrade(req, socket, head, (ws) => admit(ws, code, role, who));
+    })();
     return true;
   }
 

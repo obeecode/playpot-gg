@@ -350,3 +350,13 @@ npm run live
 - The relay at `/g/fight/ws` only forwards text between the two players of a room. It looks at nothing and keeps nothing.
 - `npm run ui-test:fight` plays a short match between two browsers through these paths. It needs `FIGHT_DIR` and `FIGHT_REF` (and `CHROMIUM` for the browser path) and skips without them.
 - Serving the original game's files counts as hosting them: use this only for your own test, and strip them (remove every `TEMP_REF__` file) before anything is shared.
+
+### Fight match records (staked-match groundwork)
+
+With the Fight game on, the relay keeps a tamper-evident record of every room that two players actually play:
+
+- Each forwarded message is appended to a hash chain with the **server's** arrival time (milliseconds since the room filled), the sender (host or guest) and the exact payload. Change, remove, reorder or retime one and the chain breaks.
+- When a player leaves, the referee signs the head of the chain (its length, last hash, both players' wallet addresses, duration and the reason it closed). The record is written to `data/fight-logs/<id>.json` and served at `/g/fight/log/<id>`.
+- Players can prove their wallet when joining by signing `PlayPot Fight: join room <ROOM> as <host|guest>` and adding `&addr=<wallet>&sig=<signature>` to the relay address. A wrong signature is refused with 401; set `requireAuth` to refuse joins without one. Staked rooms will require it.
+- Check a record any time: `node scripts/fight-verify-log.ts data/fight-logs/<id>.json <referee address>`.
+- This proves who sent what and when. It does not yet say who won: that needs the headless replay of the recorded inputs, which is the next step.

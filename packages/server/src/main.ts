@@ -294,7 +294,7 @@ export async function startServer(cfg: ServerConfig) {
       req.on("error", fail);
     });
 
-  const fight = cfg.fight ? createFight(cfg.fight) : undefined;
+  const fight = cfg.fight ? createFight({ ...cfg.fight, referee: cfg.fight.referee ?? referee, logDir: cfg.fight.logDir ?? join(cfg.dataDir, "fight-logs") }) : undefined;
   const http = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     cors(res);
     if (req.method === "OPTIONS") return void res.writeHead(204).end();

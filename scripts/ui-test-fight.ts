@@ -2,15 +2,22 @@
 // Needs the game's files on this machine (they are never in this repository):
 //   FIGHT_DIR=<gameplay-core checkout>  FIGHT_REF=<folder with TEMP_REF__site and TEMP_REF__assets>  node scripts/ui-test-fight.ts
 // Without them the test is skipped.
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { chromium, type Page } from "playwright-core";
 import { createFight, fightFromEnv, FIGHT_PREFIX } from "../packages/server/src/fight.ts";
+import { GUEST, HOST, verifyFightLog, type FightLogFile } from "../packages/server/src/fightLog.ts";
 
 const env = fightFromEnv();
 if (env.problem) console.log(`skipped: ${env.problem}`);
 if (!env.options) process.exit(0);
 
-const fight = createFight(env.options);
+const referee = privateKeyToAccount(generatePrivateKey());
+const logDir = mkdtempSync(join(tmpdir(), "fight-ui-"));
+const fight = createFight({ ...env.options, referee, logDir });
 const missing: string[] = [];
 const server = createServer((req, res) => {
   const u = new URL(req.url ?? "/", "http://x");
@@ -73,9 +80,24 @@ try {
   const fg = await fc<number>(guest.p, "__fc.GameSession.executionFrame");
   check(fh > 100 && Math.abs(fh - fg) < 30, `both clients advance in step (frames ${fh} and ${fg})`);
   check(missing.length === 0, `nothing requested outside ${FIGHT_PREFIX}${missing.length ? ": " + [...new Set(missing)].slice(0, 5).join(", ") : ""}`);
+  // when a player leaves, the relay closes and signs the match record
+  await guest.p.close();
+  for (let i = 0; i < 100 && readdirSync(logDir).length === 0; i++) await host.p.waitForTimeout(100);
+  const files = readdirSync(logDir);
+  check(files.length === 1, "the relay wrote one signed match record when a player left");
+  if (files.length === 1) {
+    const rec = JSON.parse(readFileSync(join(logDir, files[0]), "utf8")) as FightLogFile;
+    const v = await verifyFightLog(rec, referee.address);
+    check(v.ok, `the record verifies against the referee's signature${v.ok ? "" : ": " + v.errors[0]}`);
+    const hostMsgs = rec.entries.filter((e) => e.side === HOST).length, guestMsgs = rec.entries.filter((e) => e.side === GUEST).length;
+    check(hostMsgs > 100 && guestMsgs > 100, `it holds both players' traffic (${hostMsgs} from the host, ${guestMsgs} from the guest, ${Math.round(rec.head.durationMs / 1000)} s)`);
+    const times = rec.entries.map((e) => e.at);
+    check(times.every((t, i) => i === 0 || t >= times[i - 1]) && times[times.length - 1] > 5000, "server timestamps run forward over the whole match");
+  }
   const other = [...host.errors.keys(), ...guest.errors.keys()].filter((m) => !m.includes("reading 'wb'"));
   check(other.length === 0, `no page errors besides the known 'wb' one${other.length ? ": " + other[0] : ""}`);
 } finally {
+  rmSync(logDir, { recursive: true, force: true });
   await browser.close();
   fight.close();
   server.close();
