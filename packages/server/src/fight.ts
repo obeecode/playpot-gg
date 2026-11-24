@@ -131,6 +131,10 @@ export function createFight(o: FightOptions) {
       let t = readFileSync(file, "utf8");
       t = t.replace(/<script[^>]*src="https:\/\/[^"]*"[^>]*>\s*<\/script>/g, "");
       t = t.replace(/<script[^>]*>[^<]*cloudflareinsights[^<]*<\/script>/g, "");
+      // the cleaned build reads its backend address from the page; older builds are rewritten in forkMain instead
+      const base = `${proto}://${host}${FIGHT_PREFIX}`;
+      const wsBase = `${proto === "https" ? "wss" : "ws"}://${host}${FIGHT_PREFIX}`;
+      t = t.replace("<head>", `<head><script>window.GAME_API_BASE=${JSON.stringify(base)};window.GAME_WS_BASE=${JSON.stringify(wsBase)};</script>`);
       send(res, 200, t, type);
     } else {
       send(res, 200, readFileSync(file), type, true);

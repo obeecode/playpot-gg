@@ -56,6 +56,8 @@ describe("fight files", () => {
     const t = await r.text();
     assert.ok(t.includes("game"));
     assert.ok(!t.includes("accounts.google.com"));
+    assert.ok(t.includes(`window.GAME_API_BASE="http://${base}${FIGHT_PREFIX}"`));
+    assert.ok(t.includes(`window.GAME_WS_BASE="ws://${base}${FIGHT_PREFIX}"`));
   });
   it("redirects /g/fight to /g/fight/ and keeps the room code", async () => {
     const r = await get(`${FIGHT_PREFIX}?room=ABCDEF`);

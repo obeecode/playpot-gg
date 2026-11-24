@@ -346,7 +346,7 @@ npm run live
 
 - With both set, the lobby shows a **Fight** card. Open it, press *host online*, and send the invite link to your opponent.
 - Without them the game is off and nothing else changes. The server says why if a folder is wrong.
-- `FIGHT_MAIN` picks another build from `fork-core/src` (default `main.ws1.js`, the build with online play; `main.js` in that repository is the local-only build).
+- The Steam and Counterpick Labs references can be removed from the game build with `node scripts/strip-game-references.mjs` (set `FIGHT_DIR` first); the server then hands the build its backend address through the page. `FIGHT_MAIN` picks another build from `fork-core/src` (default `main.ws1.js`, the build with online play; `main.js` in that repository is the local-only build).
 - The relay at `/g/fight/ws` only forwards text between the two players of a room. It looks at nothing and keeps nothing.
 - `npm run ui-test:fight` plays a short match between two browsers through these paths. It needs `FIGHT_DIR` and `FIGHT_REF` (and `CHROMIUM` for the browser path) and skips without them.
 - Serving the original game's files counts as hosting them: use this only for your own test, and strip them (remove every `TEMP_REF__` file) before anything is shared.
