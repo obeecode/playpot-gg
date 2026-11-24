@@ -39,6 +39,7 @@ if (existing) {
     publicRpcUrl: process.env.PUBLIC_RPC_URL ?? rpc,
     escrow: process.env.ESCROW as Address,
     jinxEscrow: process.env.JINX_ESCROW as Address | undefined,
+    fightEscrow: process.env.FIGHT_ESCROW as Address | undefined,
     refereePk: process.env.REFEREE_PK as Hex,
     port: PORT,
     dataDir: process.env.DATA_DIR ?? "data",

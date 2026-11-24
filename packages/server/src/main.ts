@@ -11,6 +11,7 @@ import { Snapshots } from "./state.ts";
 import { Room } from "./room.ts";
 import { JinxHost } from "./jinxHost.ts";
 import { createFight, fightFromEnv, FIGHT_PREFIX, type FightOptions } from "./fight.ts";
+import { createFightChain, type FightChain } from "./fightSettle.ts";
 import { createAa } from "./aa.ts";
 import { PasskeyRegistry } from "./passkeys.ts";
 import { EmailAuth, brevoMailer, type Mailer } from "./email.ts";
@@ -38,6 +39,7 @@ export interface ServerConfig {
   mailer?: Mailer; // tests inject one
   requireRecovery?: boolean; // default true: gas is not sponsored for staking from a wallet that has no recovery method
   walletProtected?: (wallet: Address) => Promise<boolean>; // tests inject one; the default reads the wallet's owner count from the chain
+  fightEscrow?: Address; // with fight, staked Fight matches: rooms named for a FightEscrow match, settled on the chain by the referee
   fight?: FightOptions; // serve the Fight test game at /g/fight from folders on this machine (see fight.ts)
   proxyRpc?: boolean; // expose a restricted /rpc proxy so browsers need no direct chain access (local chains)
 }
@@ -116,8 +118,8 @@ export async function startServer(cfg: ServerConfig) {
     bundlerUrl: cfg.bundlerUrl,
     paymasterUrl: cfg.paymasterUrl,
     paymasterContext: cfg.paymasterContext,
-    allowedTargets: [cfg.escrow, tokenAddr, ...(jinxChain ? [jinxChain.escrow, jinxToken!] : [])],
-    stakeTargets: [cfg.escrow, ...(jinxChain ? [jinxChain.escrow] : [])],
+    allowedTargets: [cfg.escrow, tokenAddr, ...(jinxChain ? [jinxChain.escrow, jinxToken!] : []), ...(cfg.fightEscrow && cfg.fight ? [cfg.fightEscrow] : [])],
+    stakeTargets: [cfg.escrow, ...(jinxChain ? [jinxChain.escrow] : []), ...(cfg.fightEscrow && cfg.fight ? [cfg.fightEscrow] : [])],
     walletProtected: cfg.requireRecovery === false ? undefined : (cfg.walletProtected ?? walletHasRecovery),
   });
   const passkeys = new PasskeyRegistry(cfg.dataDir);
@@ -294,7 +296,14 @@ export async function startServer(cfg: ServerConfig) {
       req.on("error", fail);
     });
 
-  const fight = cfg.fight ? createFight({ ...cfg.fight, referee: cfg.fight.referee ?? referee, logDir: cfg.fight.logDir ?? join(cfg.dataDir, "fight-logs") }) : undefined;
+  let fightChain: FightChain | undefined;
+  if (cfg.fight && cfg.fightEscrow) {
+    fightChain = await createFightChain({ rpcUrl: cfg.rpcUrl, escrow: cfg.fightEscrow, referee, relayer });
+    const found = await fightChain.recover().catch(() => 0);
+    if (found > 0) console.log(`Fight: ${found} proposed result(s) from before the restart will be finalized when their windows end`);
+  }
+  const fight = cfg.fight ? createFight({ ...cfg.fight, referee: cfg.fight.referee ?? referee, logDir: cfg.fight.logDir ?? join(cfg.dataDir, "fight-logs"), stakes: cfg.fight.stakes ?? fightChain }) : undefined;
+  const fightTimer = fightChain ? setInterval(() => void fightChain!.finalizeDue().catch(() => {}), 15_000) : undefined;
   const http = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     cors(res);
     if (req.method === "OPTIONS") return void res.writeHead(204).end();
@@ -317,7 +326,7 @@ export async function startServer(cfg: ServerConfig) {
           jinx: jinxChain ? { escrow: jinxChain.escrow, token: jinxToken, limits: await jinxLimits() } : undefined,
           aa: { enabled: aa.enabled, sponsored: aa.sponsored },
           email: { enabled: !!email },
-          fight: fight ? { path: FIGHT_PREFIX + "/" } : undefined,
+          fight: fight ? { path: FIGHT_PREFIX + "/", escrow: cfg.fightEscrow } : undefined,
         });
       }
       if (url.pathname.startsWith("/email/") || url.pathname === "/vault") {
@@ -443,6 +452,7 @@ export async function startServer(cfg: ServerConfig) {
     close: async () => {
       timers.forEach(clearTimeout);
       clearInterval(jinxTimer);
+      clearInterval(fightTimer);
       jinxHost?.close();
       fight?.close();
       wss.clients.forEach((c) => c.terminate());
@@ -466,6 +476,7 @@ if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").hre
     publicRpcUrl: process.env.PUBLIC_RPC_URL,
     escrow: need("ESCROW") as Address,
     jinxEscrow: process.env.JINX_ESCROW as Address | undefined,
+    fightEscrow: process.env.FIGHT_ESCROW as Address | undefined,
     refereePk: need("REFEREE_PK") as Hex,
     relayerPk: process.env.RELAYER_PK as Hex | undefined,
     port: Number(process.env.PORT ?? 8787),

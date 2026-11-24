@@ -12,6 +12,7 @@ import type { Duplex } from "node:stream";
 import type { Address, LocalAccount } from "viem";
 import { WebSocketServer, type WebSocket } from "ws";
 import { FightLog, GUEST, HOST, recoverJoin, signVerdict, type FightLogFile, type FightReplay, type FightVerdict } from "./fightLog.ts";
+import { decideOutcome, matchOfRoom, stakedJoinOk, type FightOutcome, type FightStakes } from "./fightSettle.ts";
 
 export const FIGHT_PREFIX = "/g/fight";
 export const FIGHT_WS_PATH = `${FIGHT_PREFIX}/ws`;
@@ -31,6 +32,7 @@ export interface FightOptions {
   verify?: boolean; // replay each finished record headless and sign a verdict (default: on when a referee is set and the referee script exists)
   replay?: (file: FightLogFile) => Promise<FightReplay>; // tests inject one
   replayTimeoutMs?: number;
+  stakes?: FightStakes; // rooms named for an on-chain match (see roomForMatch) need a join signed with that match's key, and their result is settled on the chain
 }
 
 const REFEREE_SCRIPT = fileURLToPath(new URL("../../../scripts/fight-referee.cjs", import.meta.url));
@@ -68,6 +70,8 @@ export function createFight(o: FightOptions) {
   /** Finished match records, newest last, by id. */
   const finished = new Map<string, FightLogFile>();
   const verdicts = new Map<string, FightVerdict>();
+  /** What was submitted to the chain for staked matches, by record id. */
+  const settlements = new Map<string, { matchId: string; outcome: FightOutcome; reason: string; tx?: string; error?: string }>();
   const FINISHED_KEPT = 200;
 
   /** A request path (after the prefix) to a file in the reference folders, which carry a TEMP_REF__ label on every file name. */
@@ -99,7 +103,10 @@ export function createFight(o: FightOptions) {
       .split("https://be.counterpicklabs.com").join(origin + FIGHT_PREFIX)
       .split("wss://be.counterpicklabs.com").join(wsOrigin + FIGHT_PREFIX)
       .split('location.host + "/ws?room="').join(`location.host + "${FIGHT_WS_PATH}?room="`)
-      .split('(base || location.origin) + "/?room="').join(`(base || location.origin) + "${FIGHT_PREFIX}/?room="`);
+      .split('(base || location.origin) + "/?room="').join(`(base || location.origin) + "${FIGHT_PREFIX}/?room="`)
+      // staked matches: the page's address says which room to join and as whom, and carries the player's signed join
+      .split('"&role=" + role)').join('"&role=" + role + (window.GAME_WS_QUERY || ""))')
+      .split("CM.joinRoom(m[1].toUpperCase());").join('(/[?&]role=host(&|$)/.test(location.search) ? NET.open("host", m[1].toUpperCase()) : CM.joinRoom(m[1].toUpperCase()));');
   }
 
   /** Handles GET requests under /g/fight. Returns false when the path is not ours. */
@@ -130,6 +137,11 @@ export function createFight(o: FightOptions) {
     if (rel.startsWith("/result/")) {
       const v = verdicts.get(rel.slice("/result/".length));
       send(res, v ? 200 : 404, v ? JSON.stringify(v) : '{"error":"no verdict yet"}', MIME[".json"]);
+      return true;
+    }
+    if (rel.startsWith("/settlement/")) {
+      const v = settlements.get(rel.slice("/settlement/".length));
+      send(res, v ? 200 : 404, v ? JSON.stringify(v) : '{"error":"nothing settled for that record"}', MIME[".json"]);
       return true;
     }
     if (rel.startsWith("/wds/")) {
@@ -163,7 +175,8 @@ export function createFight(o: FightOptions) {
       // the cleaned build reads its backend address from the page; older builds are rewritten in forkMain instead
       const base = `${proto}://${host}${FIGHT_PREFIX}`;
       const wsBase = `${proto === "https" ? "wss" : "ws"}://${host}${FIGHT_PREFIX}`;
-      t = t.replace("<head>", `<head><script>window.GAME_API_BASE=${JSON.stringify(base)};window.GAME_WS_BASE=${JSON.stringify(wsBase)};</script>`);
+      const wsQuery = '(function(){var p=new URLSearchParams(location.search),s=p.get("sig"),a=p.get("addr");return s?"&sig="+encodeURIComponent(s)+(a?"&addr="+encodeURIComponent(a):""):""})()';
+      t = t.replace("<head>", `<head><script>window.GAME_API_BASE=${JSON.stringify(base)};window.GAME_WS_BASE=${JSON.stringify(wsBase)};window.GAME_WS_QUERY=${wsQuery};</script>`);
       send(res, 200, t, type);
     } else {
       send(res, 200, readFileSync(file), type, true);
@@ -178,6 +191,7 @@ export function createFight(o: FightOptions) {
     guest?: WebSocket;
     addr: { host?: Address; guest?: Address };
     log?: FightLog;
+    code: string;
     stats?: ReturnType<typeof setInterval>;
   }
   const rooms = new Map<string, Room>();
@@ -231,6 +245,19 @@ export function createFight(o: FightOptions) {
       verdicts.set(file.head.room, verdict);
       while (verdicts.size > FINISHED_KEPT) verdicts.delete(verdicts.keys().next().value as string);
       if (o.logDir) writeFileSync(join(o.logDir, `${file.head.room}.verdict.json`), JSON.stringify(verdict));
+      const matchId = matchOfRoom(file.head.room.split("-")[0]);
+      if (o.stakes && matchId !== undefined) {
+        const d = decideOutcome(replay, file.head.reason);
+        const id = file.head.room;
+        try {
+          const r = await o.stakes.settle({ matchId, outcome: d.outcome, record: file.head.head, p1Score: replay.score[0], p2Score: replay.score[1] });
+          settlements.set(id, { matchId: String(matchId), outcome: d.outcome, reason: d.reason, tx: r.tx });
+          log(`[fight] settled match ${matchId} on the chain: ${["", "host wins", "guest wins", "void, refunded"][d.outcome]} (${d.reason})`);
+        } catch (e) {
+          settlements.set(id, { matchId: String(matchId), outcome: d.outcome, reason: d.reason, error: (e as Error).message.slice(0, 200) });
+          log(`[fight] could not settle match ${matchId}: ${(e as Error).message.slice(0, 200)}`);
+        }
+      }
       log(`[fight] verdict ${file.head.room}: ${verdict.clean ? `clean, ${["no winner", "host", "guest"][verdict.winner]} wins ${verdict.hostScore}-${verdict.guestScore}` : "NOT clean, no winner named"} (${replay.stampsChecked} state hashes checked, ${replay.stampMismatches} mismatches)`);
     } catch (e) {
       log(`[fight] could not replay ${file.head.room}: ${(e as Error).message.slice(0, 160)}`);
@@ -278,7 +305,7 @@ export function createFight(o: FightOptions) {
       return;
     }
     if (!room) {
-      room = { addr: {} };
+      room = { addr: {}, code };
       rooms.set(code, room);
     }
     if (room[role]) {
@@ -361,11 +388,22 @@ export function createFight(o: FightOptions) {
       socket.write("HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n");
       socket.destroy();
     };
+    const stakedId = matchOfRoom(code);
     void (async () => {
       let who: Address | undefined;
-      if (sig && /^0x[0-9a-fA-F]{130}$/.test(sig)) who = await recoverJoin(code, role, sig as `0x${string}`);
-      if (who && claimed && who.toLowerCase() !== claimed.toLowerCase()) who = undefined;
-      if ((o.requireAuth || sig) && !who) return refuse();
+      const goodSig = sig && /^0x[0-9a-fA-F]{130}$/.test(sig) ? (sig as `0x${string}`) : undefined;
+      if (stakedId !== undefined) {
+        // a room named for an on-chain match: only that match's two players, each proving their per-match key, while it is active
+        if (!o.stakes || !goodSig) return refuse();
+        const m = await o.stakes.match(stakedId).catch(() => undefined);
+        if (!m) return refuse();
+        who = await stakedJoinOk(m, role, code, goodSig);
+        if (!who) return refuse();
+      } else {
+        if (goodSig) who = await recoverJoin(code, role, goodSig);
+        if (who && claimed && who.toLowerCase() !== claimed.toLowerCase()) who = undefined;
+        if ((o.requireAuth || sig) && !who) return refuse();
+      }
       wss.handleUpgrade(req, socket, head, (ws) => admit(ws, code, role, who));
     })();
     return true;

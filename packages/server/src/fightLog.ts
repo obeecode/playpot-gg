@@ -155,6 +155,7 @@ export interface FightReplay {
   stampsChecked: number;
   stampMismatches: number;
   desync: boolean;
+  confirmedFrame?: number; // frames the replay confirmed in the last round it played
 }
 
 export interface FightVerdict {

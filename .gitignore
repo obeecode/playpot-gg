@@ -10,3 +10,4 @@ data/
 deploy/.env
 backups/
 live.env.ps1
+.fight-keys.json

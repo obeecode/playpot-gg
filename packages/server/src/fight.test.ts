@@ -7,7 +7,7 @@ import { after, before, describe, it } from "node:test";
 import { WebSocket } from "ws";
 import { checkFightFiles, createFight, fightFromEnv, FIGHT_PREFIX, type Fight } from "./fight.ts";
 
-const MAIN = 'const a = "https://be.counterpicklabs.com"; const w = "wss://be.counterpicklabs.com"; new WebSocket(x + location.host + "/ws?room=" + r); link = (base || location.origin) + "/?room=" + room;';
+const MAIN = 'const a = "https://be.counterpicklabs.com"; const w = "wss://be.counterpicklabs.com"; new WebSocket(x + location.host + "/ws?room=" + r + "&role=" + role); link = (base || location.origin) + "/?room=" + room; if (m) CM.joinRoom(m[1].toUpperCase());';
 
 let root: string, server: Server, fight: Fight, base: string;
 const logged: string[] = [];
@@ -72,6 +72,8 @@ describe("fight files", () => {
     assert.ok(t.includes(`location.host + "${FIGHT_PREFIX}/ws?room="`));
     assert.ok(t.includes(`"${FIGHT_PREFIX}/?room="`));
     assert.ok(!t.includes("ORIGINAL"));
+    assert.ok(t.includes('"&role=" + role + (window.GAME_WS_QUERY || ""))'));
+    assert.ok(t.includes('/[?&]role=host(&|$)/.test(location.search) ? NET.open("host", m[1].toUpperCase()) : CM.joinRoom(m[1].toUpperCase())'));
   });
   it("uses the https and wss origin behind a tunnel", async () => {
     const t = await new Promise<string>((resolve, reject) => {

@@ -8,6 +8,7 @@ const out =
   `export const testTokenAbi = ${JSON.stringify(read("TestToken"), null, 2)} as const;\n\n` +
   `export const jinxEscrowAbi = ${JSON.stringify(read("JinxEscrow"), null, 2)} as const;\n\n` +
   // v2 is a superset of v1's functions, so the app uses it for both deployments.
-  `export const jinxEscrowV2Abi = ${JSON.stringify(read("JinxEscrowV2"), null, 2)} as const;\n`;
+  `export const jinxEscrowV2Abi = ${JSON.stringify(read("JinxEscrowV2"), null, 2)} as const;\n\n` +
+  `export const fightEscrowAbi = ${JSON.stringify(read("FightEscrow"), null, 2)} as const;\n`;
 writeFileSync("packages/game/src/abi.ts", out);
 console.log("wrote packages/game/src/abi.ts");

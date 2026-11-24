@@ -370,3 +370,42 @@ When a record closes, the server replays it in a separate process (`scripts/figh
 - The server signs a **verdict** (`/g/fight/result/<id>`, also written next to the record): the record's head hash, winner, score, rounds, how many hashes were checked, and whether the replay was clean. A winner is only named for a clean replay (match finished, at least one hash checked, none mismatched). Otherwise the winner is "none" and the match is left for a dispute.
 - Try it on a record: `FIGHT_DIR=... FIGHT_REF=... node scripts/fight-referee.cjs data/fight-logs/<id>.json`. `scripts/fight-record-match.ts` plays a whole match between two real browsers and checks the verdict against what both clients saw.
 - Limits: the replay uses the same JavaScript engine family as Chrome, so Safari and Firefox players are untested; a match is judged only if the record is complete; replaying a 5-minute match takes the referee roughly 15 seconds of CPU.
+
+### Staked Fight matches (testnet)
+
+Real money rules for the Fight game, built on the signed records and verdicts above. The money lives in **`contracts/src/FightEscrow.sol`** (immutable, pull payments, no proxies). A real-time match cannot be replayed on-chain, so the contract does not judge it: the referee replays the match off-chain and signs the result, anyone can check that replay against the published record, and the chain enforces the money rules.
+
+**How a staked match runs**
+1. The host opens an offer (`createOffer(stake, expiry, sessionKey)`, locking the stake) and the guest challenges it (`challenge(id, sessionKey)`, locking a matching stake). Each player registers a throwaway **per-match key**; it signs their join to the relay, so the wallet key never leaves their computer.
+2. They play in the relay room named for the match (match 42 is room `M0000042`). The relay admits only the two keys registered on-chain, and only while the match is active. Everything is recorded, replayed and judged as described above.
+3. When a player leaves, the server decides the outcome (rules below) and submits the referee's EIP-712 signature with `settle`. That opens a **challenge window**; after it, `finalize` pays the winner the pot minus the rake (the server does this for you, and picks up proposals after a restart).
+4. A player who thinks the result is wrong calls `dispute` inside the window and posts a bond. The **arbiter** (a trusted address for now) rules with `resolve`; if the arbiter stays silent, `timeoutDispute` refunds both stakes and returns the bond. A ruling that upholds the proposal costs the disputer the bond.
+5. A player can `concede` any time while the match is active. If nothing settles by the deadline, `abort` refunds both stakes with no rake.
+
+**Interim rules for forfeits and disconnects** (`decideOutcome` in `packages/server/src/fightSettle.ts`; replace them when the launch rules are set)
+
+| What happened | Outcome |
+|---|---|
+| The match finished and the replay matched every state hash the players reported | The winner wins (rake applies) |
+| The replay disagreed with a reported state hash | Void: both stakes back, kept for review |
+| A player left an unfinished match after real play (a round finished, a point scored, or ten seconds of fighting) | Forfeit: the player who stayed wins (rake applies) |
+| A player left before that, or the match otherwise did not finish | Void: both stakes back, no rake |
+
+There is no reconnect yet: a dropped connection is a leave. Timing from the record (server timestamps) is there for the launch rules to use.
+
+**Deploy and run**
+```powershell
+cd contracts
+forge test --match-contract FightEscrow                       # the contract's tests
+$env:TOKEN="0x..."; $env:REFEREE="0x..."; $env:ARBITER="0x..."; $env:TREASURY="0x..."   # ARBITER should not be the referee's wallet
+forge script script/DeployFight.s.sol --rpc-url https://sepolia.base.org --private-key <deployer key> --broadcast
+# then, with the printed address, add to the environment you run `npm run live` in (together with FIGHT_DIR and FIGHT_REF):
+$env:FIGHT_ESCROW="0x..."
+```
+The referee key the server runs with must be the `REFEREE` the escrow was deployed with. Defaults (`DeployFight.s.sol`): 3% rake, 30-minute challenge window, 5 test tokens dispute bond, stakes from 10 to 100 test tokens.
+
+**Play one** with the command line, until the lobby has screens for it (`node scripts/fight-stake.ts` with no arguments lists the commands): the host runs `offer 25`, the guest runs `challenge <id>`, each runs `link <id>` and opens their own link, both press F when ready. `status <id>`, `concede <id>`, `dispute <id>` and `claim` do what they say.
+
+**Test it end to end** (`npm run e2e:fight`, needs anvil, `forge build`, the game files, and a browser): it plays a match to the end and a match where the host walks out, through real browsers, and checks the chain, the payouts and that a settled room stays closed.
+
+**Not built yet:** screens in the lobby for offers and links, the referee's own collateral and slashing (the arbiter is trusted instead), reconnects, and anything for mainnet.

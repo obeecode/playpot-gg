@@ -129,3 +129,35 @@ export async function deployJinxV2(p: JinxV2Params): Promise<Address> {
   }
   return escrow;
 }
+
+export interface FightParams extends Omit<DeployParams, "referee"> {
+  token: Address;
+  referee: Address;
+  arbiter: Address;
+  arbiterWindow?: number;
+  minStake?: bigint;
+  maxStake?: bigint;
+}
+
+/** Deploys FightEscrow against an existing token (needs `forge build` first). */
+export async function deployFight(p: FightParams): Promise<Address> {
+  const pub = createPublicClient({ transport: http(p.rpc) });
+  const dep = createWalletClient({ account: privateKeyToAccount(p.deployerPk), transport: http(p.rpc) });
+  const f = artifact("FightEscrow");
+  const config = {
+    token: p.token,
+    referee: p.referee,
+    arbiter: p.arbiter,
+    treasury: p.treasury,
+    rakeBps: p.rakeBps ?? 300,
+    challengeWindow: BigInt(p.challengeWindow ?? 1800),
+    matchDuration: BigInt(p.matchDuration ?? 1800),
+    abortGrace: BigInt(p.abortGrace ?? 600),
+    arbiterWindow: BigInt(p.arbiterWindow ?? 86400),
+    disputeBond: p.bond ?? 5_000_000n,
+    minStake: p.minStake ?? 10_000_000n,
+    maxStake: p.maxStake ?? 100_000_000n,
+  };
+  const r = await pub.waitForTransactionReceipt({ hash: await dep.deployContract({ chain: null, abi: f.abi as never, bytecode: f.bytecode, args: [config] as never }) });
+  return r.contractAddress!;
+}
