@@ -56,6 +56,9 @@ const perSec = [new Array(secs).fill(0), new Array(secs).fill(0)];
 for (const e of game) perSec[e.side][Math.min(secs - 1, Math.floor(e.at / 1000))]++;
 const med = perSec.map((a) => pct([...a].sort((x, y) => x - y), 50));
 const thin = [];
-for (let i = 2; i < secs - 1; i++) for (const s of [0, 1]) if (perSec[s][i] < med[s] * 0.6) thin.push(`${names[s]}@${i}s(${perSec[s][i]})`);
+// skip the loading and select screens at the start: the match proper begins when both players first send at their usual rate
+let start = 0;
+while (start < secs && !(perSec[0][start] >= med[0] * 0.8 && perSec[1][start] >= med[1] * 0.8)) start++;
+for (let i = start + 1; i < secs - 1; i++) for (const s of [0, 1]) if (perSec[s][i] < med[s] * 0.6) thin.push(`${names[s]}@${i}s(${perSec[s][i]})`);
 console.log("");
-console.log(`seconds with far fewer messages than usual (typical ${med[0]}/s host, ${med[1]}/s guest): ${thin.length ? thin.slice(0, 20).join(", ") : "none"}`);
+console.log(`from second ${start} on (the match proper), seconds with far fewer messages than usual (typical ${med[0]}/s host, ${med[1]}/s guest): ${thin.length ? thin.slice(0, 20).join(", ") : "none"}`);
