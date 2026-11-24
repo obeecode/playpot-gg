@@ -39,8 +39,19 @@ export class Chain {
     this.abi = abi;
   }
 
+  /** Reads the chain id, trying a few times: a public RPC endpoint sometimes takes a moment to answer, and the server should not crash for it. */
   async init() {
-    this.chainId = await this.pub.getChainId();
+    let last: unknown;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        this.chainId = await this.pub.getChainId();
+        return;
+      } catch (e) {
+        last = e;
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+    throw last;
   }
 
   async getMatch(id: bigint): Promise<OnChainMatch> {
