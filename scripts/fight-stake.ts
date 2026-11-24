@@ -6,6 +6,7 @@
 //   node scripts/fight-stake.ts concede <id>           give up an active match
 //   node scripts/fight-stake.ts dispute <id>           dispute a proposed result (posts the dispute bond)
 //   node scripts/fight-stake.ts claim                  withdraw what you are owed
+//   node scripts/fight-stake.ts wallet                 make a new wallet (prints its address and private key; nothing is sent anywhere)
 // Environment: RPC_URL, FIGHT_ESCROW, PLAYER_PK (your wallet's private key: keep it out of chats and logs), SERVER_URL (for example
 // https://app.playpot.gg). Each match gets its own throwaway key, kept in .fight-keys.json next to where you run this (git ignores it);
 // it signs your join to the room, so your wallet key never leaves this computer. (Keys are filed by match and wallet, so two
@@ -23,6 +24,13 @@ const need = (k: string) => {
   return v;
 };
 const [cmd, arg] = process.argv.slice(2);
+/** How to run this program again, for the hints it prints: the bundled file when that is what is running. */
+const self = (process.argv[1] ?? "").endsWith(".mjs") ? "node fight-stake.mjs" : "node scripts/fight-stake.ts";
+if (cmd === "wallet") {
+  const key = generatePrivateKey();
+  console.log(`address:     ${privateKeyToAccount(key).address}\nprivate key: ${key}\n\nKeep the private key to yourself. Send only the address to whoever is funding you.`);
+  process.exit(0);
+}
 const rpc = process.env.RPC_URL ?? "https://sepolia.base.org";
 const escrow = need("FIGHT_ESCROW") as Address;
 const pub = createPublicClient({ transport: http(rpc) });
@@ -55,7 +63,7 @@ if (cmd === "offer") {
   const expiry = BigInt(Math.floor(Date.now() / 1000) + 24 * 3600);
   await send("createOffer", [stake, expiry, privateKeyToAccount(key).address]);
   writeFileSync(KEYS, JSON.stringify({ ...keys(), [slot(id)]: { key, role: "host" } }, null, 2));
-  console.log(`offer ${id} is open with ${arg} tokens locked. Tell your opponent to run:  node scripts/fight-stake.ts challenge ${id}`);
+  console.log(`offer ${id} is open with ${arg} tokens locked. Tell your opponent to run:  ${self} challenge ${id}`);
 } else if (cmd === "challenge") {
   const id = BigInt(arg ?? "");
   const offer = (await read("offers", [id])) as readonly [Address, Address, bigint, bigint, boolean];
@@ -64,7 +72,7 @@ if (cmd === "offer") {
   await ensureApproval(offer[2]);
   await send("challenge", [id, privateKeyToAccount(key).address]);
   writeFileSync(KEYS, JSON.stringify({ ...keys(), [slot(id)]: { key, role: "guest" } }, null, 2));
-  console.log(`match ${id} has started. Open your link:  node scripts/fight-stake.ts link ${id}`);
+  console.log(`match ${id} has started. Open your link:  ${self} link ${id}`);
 } else if (cmd === "link") {
   const id = BigInt(arg ?? "");
   const mine = keys()[slot(id)];
@@ -96,6 +104,6 @@ if (cmd === "offer") {
     console.log(`claimed ${Number(owed) / 1e6} tokens`);
   }
 } else {
-  console.log("usage: node scripts/fight-stake.ts offer <stake> | challenge <id> | link <id> | status <id> | concede <id> | dispute <id> | claim");
+  console.log(`usage: ${self} wallet | offer <stake> | challenge <id> | link <id> | status <id> | concede <id> | dispute <id> | claim`);
   process.exit(2);
 }

@@ -30,6 +30,7 @@
     "ui-test:jinx": "node scripts/ui-test-jinx.ts",
     "ui-test:practice": "node scripts/ui-test-practice.ts",
     "ui-test:fight": "node scripts/ui-test-fight.ts",
+    "build:stake-cli": "node scripts/build-stake-cli.mjs",
     "e2e:fight": "node scripts/e2e-fight.ts",
     "fight:determinism": "node scripts/fight-determinism.ts",
     "fight:headless": "node scripts/fight-headless.cjs",

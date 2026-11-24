@@ -406,6 +406,8 @@ The referee key the server runs with must be the `REFEREE` the escrow was deploy
 
 **Play one** with the command line, until the lobby has screens for it (`node scripts/fight-stake.ts` with no arguments lists the commands): the host runs `offer 25`, the guest runs `challenge <id>`, each runs `link <id>` and opens their own link, both press F when ready. `status <id>`, `concede <id>`, `dispute <id>` and `claim` do what they say.
 
+**For a player who only plays** (no clone, no GitHub access, no Foundry): `npm run build:stake-cli` writes `dist/fight-stake.mjs`, one file with everything inside. Send it to them; they need only Node 22 or newer. `node fight-stake.mjs wallet` makes them a wallet, and the same commands as above work with that file name (keys are kept in `.fight-keys.json` next to it).
+
 **Test it end to end** (`npm run e2e:fight`, needs anvil, `forge build`, the game files, and a browser): it plays a match to the end and a match where the host walks out, through real browsers, and checks the chain, the payouts and that a settled room stays closed.
 
 **Not built yet:** screens in the lobby for offers and links, the referee's own collateral and slashing (the arbiter is trusted instead), reconnects, and anything for mainnet.
