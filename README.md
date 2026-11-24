@@ -359,4 +359,14 @@ With the Fight game on, the relay keeps a tamper-evident record of every room th
 - When a player leaves, the referee signs the head of the chain (its length, last hash, both players' wallet addresses, duration and the reason it closed). The record is written to `data/fight-logs/<id>.json` and served at `/g/fight/log/<id>`.
 - Players can prove their wallet when joining by signing `PlayPot Fight: join room <ROOM> as <host|guest>` and adding `&addr=<wallet>&sig=<signature>` to the relay address. A wrong signature is refused with 401; set `requireAuth` to refuse joins without one. Staked rooms will require it.
 - Check a record any time: `node scripts/fight-verify-log.ts data/fight-logs/<id>.json <referee address>`.
-- This proves who sent what and when. It does not yet say who won: that needs the headless replay of the recorded inputs, which is the next step.
+- This proves who sent what and when. Who won is decided by the referee replay below.
+
+#### The referee replay and the signed verdict
+
+When a record closes, the server replays it in a separate process (`scripts/fight-referee.cjs`, using `scripts/lib/fight-referee.cjs`):
+
+- The game runs headless in Node (no browser or graphics) as a match in which **both** players are remote. The host's recorded messages feed one remote peer and the guest's feed the other, so the game's own decoder rebuilds each player's inputs the way an opponent's client would, and the game's own match logic plays the rounds and decides every KO. No rule is reimplemented.
+- Every 60 frames each client stamped a hash of its game state. The referee records the hash its own game computed for each stamped frame and requires **every copy of every stamp the clients sent** to match. A client that played different inputs from the ones it sent, or lied about its state, shows up as mismatches.
+- The server signs a **verdict** (`/g/fight/result/<id>`, also written next to the record): the record's head hash, winner, score, rounds, how many hashes were checked, and whether the replay was clean. A winner is only named for a clean replay (match finished, at least one hash checked, none mismatched). Otherwise the winner is "none" and the match is left for a dispute.
+- Try it on a record: `FIGHT_DIR=... FIGHT_REF=... node scripts/fight-referee.cjs data/fight-logs/<id>.json`. `scripts/fight-record-match.ts` plays a whole match between two real browsers and checks the verdict against what both clients saw.
+- Limits: the replay uses the same JavaScript engine family as Chrome, so Safari and Firefox players are untested; a match is judged only if the record is complete; replaying a 5-minute match takes the referee roughly 15 seconds of CPU.

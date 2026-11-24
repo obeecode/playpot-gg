@@ -2,13 +2,16 @@
 // two players. The game's files are never part of this repository: FIGHT_DIR points at a gameplay-core checkout and FIGHT_REF at
 // the folder holding TEMP_REF__site and TEMP_REF__assets. The relay is blind: it forwards text frames between the two players of
 // a room and keeps nothing after the room closes.
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, join, resolve, sep } from "node:path";
 import type { Duplex } from "node:stream";
 import type { Address, LocalAccount } from "viem";
 import { WebSocketServer, type WebSocket } from "ws";
-import { FightLog, GUEST, HOST, recoverJoin, type FightLogFile } from "./fightLog.ts";
+import { FightLog, GUEST, HOST, recoverJoin, signVerdict, type FightLogFile, type FightReplay, type FightVerdict } from "./fightLog.ts";
 
 export const FIGHT_PREFIX = "/g/fight";
 export const FIGHT_WS_PATH = `${FIGHT_PREFIX}/ws`;
@@ -25,7 +28,12 @@ export interface FightOptions {
   logDir?: string; // where finished records are written (the record is also served at /g/fight/log/<id>)
   requireAuth?: boolean; // players must join with a wallet signature (see joinMessage in fightLog.ts); otherwise it is optional
   now?: () => number;
+  verify?: boolean; // replay each finished record headless and sign a verdict (default: on when a referee is set and the referee script exists)
+  replay?: (file: FightLogFile) => Promise<FightReplay>; // tests inject one
+  replayTimeoutMs?: number;
 }
+
+const REFEREE_SCRIPT = fileURLToPath(new URL("../../../scripts/fight-referee.cjs", import.meta.url));
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -59,6 +67,7 @@ export function createFight(o: FightOptions) {
   const now = o.now ?? Date.now;
   /** Finished match records, newest last, by id. */
   const finished = new Map<string, FightLogFile>();
+  const verdicts = new Map<string, FightVerdict>();
   const FINISHED_KEPT = 200;
 
   /** A request path (after the prefix) to a file in the reference folders, which carry a TEMP_REF__ label on every file name. */
@@ -116,6 +125,11 @@ export function createFight(o: FightOptions) {
     if (rel.startsWith("/log/")) {
       const f = finished.get(rel.slice("/log/".length));
       send(res, f ? 200 : 404, f ? JSON.stringify(f) : '{"error":"no such record"}', MIME[".json"]);
+      return true;
+    }
+    if (rel.startsWith("/result/")) {
+      const v = verdicts.get(rel.slice("/result/".length));
+      send(res, v ? 200 : 404, v ? JSON.stringify(v) : '{"error":"no verdict yet"}', MIME[".json"]);
       return true;
     }
     if (rel.startsWith("/wds/")) {
@@ -187,6 +201,42 @@ export function createFight(o: FightOptions) {
   }, o.keepAliveMs ?? 20_000);
   timer.unref();
 
+  /** Runs the headless referee over a record in a separate process and returns what it found. */
+  function runReplay(file: FightLogFile): Promise<FightReplay> {
+    const dir = mkdtempSync(join(tmpdir(), "fight-replay-"));
+    const rec = join(dir, "record.json");
+    const out = join(dir, "result.json");
+    writeFileSync(rec, JSON.stringify(file));
+    return new Promise((resolve, reject) => {
+      execFile(process.execPath, [REFEREE_SCRIPT, rec, "--out", out], { env: { ...process.env, FIGHT_DIR: o.gameDir, FIGHT_REF: o.refDir, FIGHT_QUIET: "1" }, timeout: o.replayTimeoutMs ?? 600_000, maxBuffer: 1 << 24 }, (err) => {
+        try {
+          if (!existsSync(out)) throw err ?? new Error("the referee wrote no result");
+          resolve(JSON.parse(readFileSync(out, "utf8")) as FightReplay); // exit code 1 just means "not clean": the result file says why
+        } catch (e) {
+          reject(e);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+    });
+  }
+
+  /** Replays a finished record and signs the verdict. */
+  async function judge(file: FightLogFile) {
+    const referee = o.referee;
+    if (!referee) return;
+    try {
+      const replay = await (o.replay ?? runReplay)(file);
+      const verdict = await signVerdict(referee, file.head.room, file.head.head, replay);
+      verdicts.set(file.head.room, verdict);
+      while (verdicts.size > FINISHED_KEPT) verdicts.delete(verdicts.keys().next().value as string);
+      if (o.logDir) writeFileSync(join(o.logDir, `${file.head.room}.verdict.json`), JSON.stringify(verdict));
+      log(`[fight] verdict ${file.head.room}: ${verdict.clean ? `clean, ${["no winner", "host", "guest"][verdict.winner]} wins ${verdict.hostScore}-${verdict.guestScore}` : "NOT clean, no winner named"} (${replay.stampsChecked} state hashes checked, ${replay.stampMismatches} mismatches)`);
+    } catch (e) {
+      log(`[fight] could not replay ${file.head.room}: ${(e as Error).message.slice(0, 160)}`);
+    }
+  }
+
   /** Signs and stores the match record, if there is one. */
   function closeRecord(r: Room, reason: string) {
     const record = r.log;
@@ -205,6 +255,7 @@ export function createFight(o: FightOptions) {
         }
       }
       log(`[fight] record ${record.room}: ${file.head.count} messages over ${Math.round(file.head.durationMs / 1000)} s, ${reason}`);
+      if (o.verify ?? (existsSync(REFEREE_SCRIPT) && existsSync(mainPath))) void judge(file);
     });
   }
 

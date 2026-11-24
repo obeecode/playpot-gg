@@ -139,3 +139,75 @@ export async function recoverJoin(room: string, role: "host" | "guest", signatur
     return undefined;
   }
 }
+
+// ---- the verdict: what the referee found when it replayed a record ----
+
+export const WINNER_NONE = 0;
+export const WINNER_HOST = 1;
+export const WINNER_GUEST = 2;
+
+/** The replay's findings, as the headless referee reports them (scripts/lib/fight-referee.cjs). */
+export interface FightReplay {
+  finished: boolean;
+  winner: "host" | "guest" | null;
+  score: [number, number];
+  rounds: number;
+  stampsChecked: number;
+  stampMismatches: number;
+  desync: boolean;
+}
+
+export interface FightVerdict {
+  version: 1;
+  room: string; // the record's id
+  record: Hex; // the head hash of the record that was replayed
+  winner: typeof WINNER_NONE | typeof WINNER_HOST | typeof WINNER_GUEST;
+  hostScore: number;
+  guestScore: number;
+  rounds: number;
+  stampsChecked: number;
+  clean: boolean; // finished, with every state hash the players reported matching the referee's replay
+  signature: Hex;
+  signer: Address;
+}
+
+/** A winner is only ever named for a clean replay: an unfinished match or any mismatch leaves it open (winner none) for a dispute. */
+export const verdictDigest = (v: Omit<FightVerdict, "signature" | "signer">): Hex =>
+  keccak256(
+    encodeAbiParameters(
+      [{ type: "string" }, { type: "string" }, { type: "bytes32" }, { type: "uint8" }, { type: "uint8" }, { type: "uint8" }, { type: "uint8" }, { type: "uint32" }, { type: "bool" }],
+      ["PLAYPOT_FIGHT_VERDICT", v.room, v.record, v.winner, v.hostScore, v.guestScore, v.rounds, v.stampsChecked, v.clean],
+    ),
+  );
+
+export async function signVerdict(referee: LocalAccount, room: string, record: Hex, replay: FightReplay): Promise<FightVerdict> {
+  const clean = replay.finished && !replay.desync && replay.stampMismatches === 0 && replay.stampsChecked > 0;
+  const body = {
+    version: 1 as const,
+    room,
+    record,
+    winner: (clean ? (replay.winner === "host" ? WINNER_HOST : replay.winner === "guest" ? WINNER_GUEST : WINNER_NONE) : WINNER_NONE) as FightVerdict["winner"],
+    hostScore: Math.min(255, Math.max(0, replay.score[0])),
+    guestScore: Math.min(255, Math.max(0, replay.score[1])),
+    rounds: Math.min(255, Math.max(0, replay.rounds)),
+    stampsChecked: Math.max(0, replay.stampsChecked),
+    clean,
+  };
+  const signature = await referee.signMessage({ message: { raw: verdictDigest(body) } });
+  return { ...body, signature, signer: referee.address };
+}
+
+export async function verifyVerdict(v: FightVerdict, file: FightLogFile, expectedSigner?: Address): Promise<FightLogCheck> {
+  const errors: string[] = [];
+  if (v.record !== file.head.head) errors.push("the verdict is for a different record");
+  if (v.room !== file.head.room) errors.push("the verdict names a different match");
+  if (!v.clean && v.winner !== WINNER_NONE) errors.push("a winner is named although the replay was not clean");
+  try {
+    const signer = await recoverMessageAddress({ message: { raw: verdictDigest(v) }, signature: v.signature });
+    if (signer.toLowerCase() !== v.signer.toLowerCase()) errors.push("the signature was not made by the stated signer");
+    if (expectedSigner && signer.toLowerCase() !== expectedSigner.toLowerCase()) errors.push("the verdict was not signed by the expected referee");
+  } catch {
+    errors.push("the signature is not valid");
+  }
+  return { ok: errors.length === 0, errors };
+}

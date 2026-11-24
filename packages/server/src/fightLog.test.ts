@@ -7,7 +7,7 @@ import { after, before, describe, it } from "node:test";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { WebSocket } from "ws";
 import { createFight, FIGHT_PREFIX, type Fight } from "./fight.ts";
-import { FightLog, GUEST, HOST, fightGenesis, joinMessage, verifyFightLog, type FightLogFile } from "./fightLog.ts";
+import { FightLog, GUEST, HOST, WINNER_GUEST, WINNER_HOST, WINNER_NONE, fightGenesis, joinMessage, signVerdict, verifyFightLog, verifyVerdict, type FightLogFile, type FightReplay } from "./fightLog.ts";
 
 const referee = privateKeyToAccount(generatePrivateKey());
 const alice = privateKeyToAccount(generatePrivateKey());
@@ -74,6 +74,42 @@ describe("fight match record", () => {
   });
 });
 
+const replayOf = (o: Partial<FightReplay> = {}): FightReplay => ({ finished: true, winner: "guest", score: [1, 2], rounds: 3, stampsChecked: 74, stampMismatches: 0, desync: false, ...o });
+
+describe("fight verdict", () => {
+  it("names the winner of a clean replay and verifies against the record and the referee", async () => {
+    const rec = await build();
+    const v = await signVerdict(referee, rec.head.room, rec.head.head, replayOf());
+    assert.equal(v.clean, true);
+    assert.equal(v.winner, WINNER_GUEST);
+    assert.deepEqual([v.hostScore, v.guestScore, v.rounds], [1, 2, 3]);
+    assert.deepEqual(await verifyVerdict(v, rec, referee.address), { ok: true, errors: [] });
+    const host = await signVerdict(referee, rec.head.room, rec.head.head, replayOf({ winner: "host", score: [2, 0] }));
+    assert.equal(host.winner, WINNER_HOST);
+  });
+  it("names no winner when the match did not finish, a state hash did not match, or nothing was checked", async () => {
+    const rec = await build();
+    for (const bad of [{ finished: false, winner: null }, { stampMismatches: 3, desync: true }, { desync: true }, { stampsChecked: 0 }] as Partial<FightReplay>[]) {
+      const v = await signVerdict(referee, rec.head.room, rec.head.head, replayOf(bad));
+      assert.equal(v.clean, false, JSON.stringify(bad));
+      assert.equal(v.winner, WINNER_NONE, JSON.stringify(bad));
+      assert.ok((await verifyVerdict(v, rec)).ok);
+    }
+  });
+  it("rejects a verdict that was edited, moved to another record, or signed by someone else", async () => {
+    const rec = await build();
+    const v = await signVerdict(referee, rec.head.room, rec.head.head, replayOf());
+    assert.equal((await verifyVerdict({ ...v, winner: WINNER_HOST }, rec)).ok, false);
+    assert.equal((await verifyVerdict({ ...v, guestScore: 0 }, rec)).ok, false);
+    const other = clone(rec);
+    other.head.head = `0x${"11".repeat(32)}`;
+    assert.equal((await verifyVerdict(v, other)).ok, false);
+    assert.equal((await verifyVerdict(v, rec, privateKeyToAccount(generatePrivateKey()).address)).ok, false);
+    const forged = { ...(await signVerdict(privateKeyToAccount(generatePrivateKey()), rec.head.room, rec.head.head, replayOf())) };
+    assert.equal((await verifyVerdict(forged, rec, referee.address)).ok, false);
+  });
+});
+
 let root: string, server: Server, fight: Fight, base: string, logDir: string;
 before(async () => {
   root = mkdtempSync(join(tmpdir(), "fightlog-"));
@@ -84,7 +120,7 @@ before(async () => {
   mkdirSync(join(ref, "TEMP_REF__site"), { recursive: true });
   mkdirSync(join(ref, "TEMP_REF__assets"), { recursive: true });
   writeFileSync(join(game, "fork-core", "src", "main.ws1.js"), "x");
-  fight = createFight({ gameDir: game, refDir: ref, referee, logDir, keepAliveMs: 60_000, statsMs: 60_000, log: () => {} });
+  fight = createFight({ gameDir: game, refDir: ref, referee, logDir, keepAliveMs: 60_000, statsMs: 60_000, log: () => {}, verify: true, replay: async () => replayOf() });
   server = createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://x");
     if (!fight.http(req, res, u.pathname, u.search)) res.writeHead(404).end();
@@ -114,7 +150,8 @@ const until = async (f: () => boolean) => {
   for (let i = 0; i < 150 && !f(); i++) await new Promise((r) => setTimeout(r, 20));
   assert.ok(f(), "timed out");
 };
-const records = () => (existsSync(logDir) ? readdirSync(logDir) : []);
+const files = () => (existsSync(logDir) ? readdirSync(logDir) : []);
+const records = () => files().filter((f) => !f.endsWith(".verdict.json"));
 const sign = (a: typeof alice, room: string, role: "host" | "guest") => a.signMessage({ message: joinMessage(room, role) });
 
 describe("fight relay records", () => {
@@ -141,6 +178,22 @@ describe("fight relay records", () => {
     const served = (await (await fetch(`http://${base}${FIGHT_PREFIX}/log/${file.head.room}`)).json()) as FightLogFile;
     assert.equal(served.head.head, file.head.head);
     assert.equal((await fetch(`http://${base}${FIGHT_PREFIX}/log/nope`)).status, 404);
+    h.ws.close();
+  });
+  it("replays a closed record, signs the verdict and serves it", async () => {
+    const h = await open("VER001", "host");
+    const g = await open("VER001", "guest");
+    await until(() => g.got.includes("sready"));
+    h.ws.send("r1:1|1|i2$|");
+    await until(() => g.got.includes("r1:1|1|i2$|"));
+    g.ws.close();
+    await until(() => files().some((f) => f.startsWith("VER001-") && f.endsWith(".verdict.json")));
+    const recName = records().find((f) => f.startsWith("VER001-")) as string;
+    const rec = JSON.parse(readFileSync(join(logDir, recName), "utf8")) as FightLogFile;
+    const v = (await (await fetch(`http://${base}${FIGHT_PREFIX}/result/${rec.head.room}`)).json()) as Awaited<ReturnType<typeof signVerdict>>;
+    assert.deepEqual(await verifyVerdict(v, rec, referee.address), { ok: true, errors: [] });
+    assert.equal(v.winner, WINNER_GUEST);
+    assert.equal((await fetch(`http://${base}${FIGHT_PREFIX}/result/nope`)).status, 404);
     h.ws.close();
   });
   it("does not keep a record for a room where nothing was played", async () => {
