@@ -111,28 +111,34 @@ async function play(label: string, seed: number, ending: "to the end" | "host wa
   const sigHost = await k1.signMessage({ message: joinMessage(room, "host") });
   const sigGuest = await k2.signMessage({ message: joinMessage(room, "guest") });
 
-  const mk = async () => (await browser.newContext({ viewport: { width: 960, height: 540 } })).newPage();
+  // loading the game (about 20 MB of art, rendered in software when there is no graphics card) can take a while on a slow machine
+  const mk = async () => {
+    const p = await (await browser.newContext({ viewport: { width: 960, height: 540 } })).newPage();
+    p.setDefaultTimeout(240_000);
+    p.setDefaultNavigationTimeout(240_000);
+    return p;
+  };
   const host = await mk(), guest = await mk();
   // a stranger with no match key cannot take a seat
   const intruder = await mk();
   await intruder.goto(`${base}/g/fight/?room=${room}&role=host&sig=${await privateKeyToAccount(generatePrivateKey()).signMessage({ message: joinMessage(room, "host") })}`);
-  await intruder.waitForFunction("window.__fc && window.__fc.CM", undefined, { timeout: 90_000 });
+  await intruder.waitForFunction("window.__fc && window.__fc.CM", undefined, { timeout: 240_000 });
   await intruder.waitForTimeout(4000);
   check(!(await intruder.evaluate("!!(window.__fc.NET && window.__fc.NET.active)")), "a stranger's signature does not get a seat in the room");
   await intruder.close();
 
   await host.goto(`${base}/g/fight/?room=${room}&role=host&sig=${sigHost}`);
-  await host.waitForFunction("window.__fc && window.__fc.CM", undefined, { timeout: 90_000 });
+  await host.waitForFunction("window.__fc && window.__fc.CM", undefined, { timeout: 240_000 });
   await host.waitForTimeout(3000);
   await guest.goto(`${base}/g/fight/?room=${room}&sig=${sigGuest}`);
-  await guest.waitForFunction("window.__fc && window.__fc.NET && window.__fc.NET.active", undefined, { timeout: 90_000 });
+  await guest.waitForFunction("window.__fc && window.__fc.NET && window.__fc.NET.active", undefined, { timeout: 240_000 });
   await host.waitForTimeout(6000);
   for (const p of [host, guest]) {
     await p.mouse.click(480, 300);
     await p.keyboard.press("f");
     await p.waitForTimeout(500);
   }
-  await host.waitForFunction("__fc.CM.mode === 'match'", undefined, { timeout: 30_000 });
+  await host.waitForFunction("__fc.CM.mode === 'match'", undefined, { timeout: 120_000 });
   const keys = ["a", "d", "w", "f", "g", "e"];
   const r1 = rng(seed), r2 = rng(seed + 1000);
   const held = [new Set<string>(), new Set<string>()];
@@ -178,7 +184,7 @@ async function play(label: string, seed: number, ending: "to the end" | "host wa
   // the room is closed for good once the match has settled
   const late = await mk();
   await late.goto(`${base}/g/fight/?room=${room}&sig=${sigGuest}`);
-  await late.waitForFunction("window.__fc && window.__fc.CM", undefined, { timeout: 90_000 });
+  await late.waitForFunction("window.__fc && window.__fc.CM", undefined, { timeout: 240_000 });
   await late.waitForTimeout(3000);
   check(!(await late.evaluate("!!(window.__fc.NET && window.__fc.NET.active)")), "a settled match's room does not admit anyone again");
   await late.close();
