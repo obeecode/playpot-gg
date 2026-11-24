@@ -47,5 +47,24 @@
     "disputeBond": "5000000",
     "verified": true,
     "explorer": "https://sepolia.basescan.org/address/0xd8604826C40B57dA7472A1A813C10DC20Aa7555e#code"
+  },
+  "fightEscrow": {
+    "address": "0x392562F8A8C6893313c14624f9940A9e496731AC",
+    "deployTx": "0x0f99bea2d099f9dff8c446f47662e20da741d648ca719b663c8c15de7ff310dc",
+    "block": 63160820,
+    "token": "0x43aD88593cFE37567Aa6385812260446168E2eb7",
+    "referee": "0xC3Abd6eD23D0b57dCBB0fA0C6F4f45eD745d2DB5",
+    "arbiter": "0xa5dEd4cB30460381430c57167F2eE095aA97A972",
+    "treasury": "0x25f2c0C83a53B95De574836671bd9aBB3df77c37",
+    "rakeBps": 300,
+    "challengeWindowSeconds": 60,
+    "matchDurationSeconds": 1800,
+    "abortGraceSeconds": 600,
+    "arbiterWindowSeconds": 86400,
+    "disputeBond": "5000000",
+    "minStake": "10000000",
+    "maxStake": "100000000",
+    "verified": false,
+    "note": "Test deployment with a 60-second challenge window so payouts are quick. Redeploy with the default 1800 for real use."
   }
 }
