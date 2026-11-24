@@ -237,19 +237,22 @@ contract FightEscrowTest is FightFixture {
         escrow.settle(id, v, _sig(PK_BAD, d), "", _sig(PK_REF, d)); // not player 1's key
         vm.expectRevert(FightEscrow.NotReferee.selector);
         escrow.settle(id, v, "", "", ""); // the referee is required
+        bytes memory forOther = _sig(PK_REF, _digest(other, v)); // computed first: an external call between expectRevert and the call under test would use it up
         vm.expectRevert(FightEscrow.BadSignature.selector);
-        escrow.settle(id, v, "", "", _sig(PK_REF, _digest(other, v))); // a signature for another match
+        escrow.settle(id, v, "", "", forOther); // a signature for another match
         FightEscrow.Verdict memory edited = _verdict(1, 9, 0);
         vm.expectRevert(FightEscrow.BadSignature.selector);
         escrow.settle(id, edited, "", "", _sig(PK_REF, d)); // an edited score
         vm.expectRevert(FightEscrow.BadSignature.selector);
         escrow.settle(id, v, "", "", new bytes(65)); // an empty signature
         FightEscrow.Verdict memory zero = _verdict(0, 0, 0);
+        bytes memory sigZero = _sig(PK_REF, _digest(id, zero));
         vm.expectRevert(FightEscrow.BadParam.selector);
-        escrow.settle(id, zero, "", "", _sig(PK_REF, _digest(id, zero)));
+        escrow.settle(id, zero, "", "", sigZero);
         FightEscrow.Verdict memory four = _verdict(4, 0, 0);
+        bytes memory sigFour = _sig(PK_REF, _digest(id, four));
         vm.expectRevert(FightEscrow.BadParam.selector);
-        escrow.settle(id, four, "", "", _sig(PK_REF, _digest(id, four)));
+        escrow.settle(id, four, "", "", sigFour);
     }
 
     function test_voidRefundsBothWithoutRake() public {
