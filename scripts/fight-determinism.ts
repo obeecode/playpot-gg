@@ -47,6 +47,7 @@ async function run(): Promise<{ hashes: string[]; ms: number; errors: number; fr
   return out;
 }
 const a = await run(), c2 = await run();
+if (process.env.HASH_OUT) (await import("node:fs")).writeFileSync(process.env.HASH_OUT, JSON.stringify(a.hashes));
 let firstDiff = -1; for (let i = 0; i < a.hashes.length; i++) if (a.hashes[i] !== c2.hashes[i]) { firstDiff = i; break; }
 console.log(`start frames A/B: ${a.startFrame}/${c2.startFrame}`);
 console.log(`run A: ${a.frame} frames, ${a.errors} tick errors, ${(a.ms / N * 1000).toFixed(0)} us per tick (incl. hashing), distinct hashes ${new Set(a.hashes).size}`);
