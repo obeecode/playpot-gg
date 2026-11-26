@@ -16,6 +16,16 @@
     return rafOn ? raf(cb) : 0;
   };
 
+  // The game also ticks itself from a 17 ms timer. Left running it adds frames at moments that differ from machine to machine, so
+  // once the probe takes over (frozen = true) that timer's ticks are dropped.
+  var frozen = false;
+  var realSetInterval = window.setInterval.bind(window);
+  window.setInterval = function (fn, d) {
+    var rest = Array.prototype.slice.call(arguments, 2);
+    if (d === 17 && typeof fn === "function") return realSetInterval.apply(null, [function () { if (!frozen) fn(); }, d].concat(rest));
+    return realSetInterval.apply(null, [fn, d].concat(rest));
+  };
+
   var box;
   function show(lines) {
     if (!box) {
@@ -109,9 +119,12 @@
     rafOn = false;
     await sleep(300);
     var fc = window.__fc, GS = fc.GameSession;
+    frozen = true; // from here on only this script advances frames
     await fc.CM.startMatch();
     await sleep(500);
+    result.startFrame = GS.executionFrame; // shown, so two browsers that started apart can be told
     for (i = 0; i < 400 && GS.executionFrame < 200; i++) GS.tick(); // every browser starts the script from the same frame
+    result.alignedFrame = GS.executionFrame;
     var s = SEED | 0 || 1;
     function rnd() {
       s ^= s << 13;
@@ -158,6 +171,7 @@
       "PROBE " + SEED + "," + N + "   (open the same address in each browser; the fingerprints must match)",
       "",
       "GAME FINGERPRINT: " + result.fingerprint,
+      "start frame: " + result.startFrame + " -> " + result.alignedFrame + " (must be the same everywhere)",
       "frames: " + N + ", tick errors: " + errors + ", frames without a snapshot: " + unavailable,
       "checkpoints (cumulative): " + result.checkpoints.join("  "),
       "",
