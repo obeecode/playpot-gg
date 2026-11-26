@@ -36,6 +36,8 @@ export interface FightOptions {
 }
 
 const REFEREE_SCRIPT = fileURLToPath(new URL("../../../scripts/fight-referee.cjs", import.meta.url));
+/** The cross-browser determinism probe: added to the page only when its address has ?probe=. */
+const PROBE_SCRIPT = readFileSync(fileURLToPath(new URL("./fightProbe.client.js", import.meta.url)), "utf8");
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -176,7 +178,8 @@ export function createFight(o: FightOptions) {
       const base = `${proto}://${host}${FIGHT_PREFIX}`;
       const wsBase = `${proto === "https" ? "wss" : "ws"}://${host}${FIGHT_PREFIX}`;
       const wsQuery = '(function(){var p=new URLSearchParams(location.search),s=p.get("sig"),a=p.get("addr");return s?"&sig="+encodeURIComponent(s)+(a?"&addr="+encodeURIComponent(a):""):""})()';
-      t = t.replace("<head>", `<head><script>window.GAME_API_BASE=${JSON.stringify(base)};window.GAME_WS_BASE=${JSON.stringify(wsBase)};window.GAME_WS_QUERY=${wsQuery};</script>`);
+      const probe = /[?&]probe=/.test(search) ? `<script>${PROBE_SCRIPT}</script>` : "";
+      t = t.replace("<head>", `<head><script>window.GAME_API_BASE=${JSON.stringify(base)};window.GAME_WS_BASE=${JSON.stringify(wsBase)};window.GAME_WS_QUERY=${wsQuery};</script>${probe}`);
       send(res, 200, t, type);
     } else {
       send(res, 200, readFileSync(file), type, true);

@@ -34,6 +34,7 @@
     "e2e:fight": "node scripts/e2e-fight.ts",
     "fight:determinism": "node scripts/fight-determinism.ts",
     "fight:headless": "node scripts/fight-headless.cjs",
+    "fight:probe": "node scripts/fight-probe.ts",
     "ui-test:smart": "node scripts/ui-test-smart.ts",
     "ui-test:passkey": "node scripts/ui-test-passkey.ts",
     "ui-test:email": "node scripts/ui-test-email.ts",

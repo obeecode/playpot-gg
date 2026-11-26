@@ -59,6 +59,12 @@ describe("fight files", () => {
     assert.ok(t.includes(`window.GAME_API_BASE="http://${base}${FIGHT_PREFIX}"`));
     assert.ok(t.includes(`window.GAME_WS_BASE="ws://${base}${FIGHT_PREFIX}"`));
   });
+  it("adds the cross-browser probe to the page only when asked for", async () => {
+    assert.ok(!(await (await get(`${FIGHT_PREFIX}/`)).text()).includes("__probe"));
+    const t = await (await get(`${FIGHT_PREFIX}/?probe=7,1500`)).text();
+    assert.ok(t.includes("window.__probe"));
+    assert.ok(t.indexOf("window.GAME_API_BASE") < t.indexOf("window.__probe")); // before the game's own scripts
+  });
   it("redirects /g/fight to /g/fight/ and keeps the room code", async () => {
     const r = await get(`${FIGHT_PREFIX}?room=ABCDEF`);
     assert.equal(r.status, 302);

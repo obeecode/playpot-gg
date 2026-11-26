@@ -411,3 +411,11 @@ The referee key the server runs with must be the `REFEREE` the escrow was deploy
 **Test it end to end** (`npm run e2e:fight`, needs anvil, `forge build`, the game files, and a browser): it plays a match to the end and a match where the host walks out, through real browsers, and checks the chain, the payouts and that a settled room stays closed.
 
 **Not built yet:** screens in the lobby for offers and links, the referee's own collateral and slashing (the arbiter is trusted instead), reconnects, and anything for mainnet.
+
+#### Is the game the same in every browser? The probe
+
+The referee replays a match on Node (the engine Chrome, Edge and Brave use). A browser with a different JavaScript engine could compute a slightly different match if the game uses math functions that engines are allowed to compute a little differently (`sin`, `cos`, `atan2`, `pow` and similar). Check it directly:
+
+- Start the server and open **`/g/fight/?probe=7,1500`** in each browser, for example `http://localhost:8787/g/fight/?probe=7,1500` (use your public address from a phone or another computer). The page plays 1,500 frames of a scripted match, then shows a **game fingerprint**. Every browser must show the same one. The page also shows a fingerprint of each math function on its own, so a difference can be traced to the function that causes it.
+- Reference for the current build, seed 7 and 1,500 frames: game fingerprint `c1e8dd852e0a1087`, the same in Chromium and in plain Node (`node scripts/fight-headless.cjs 1500 7 out.json` then `node scripts/fight-compare.mjs --fingerprint out.json`). `npm run fight:probe` runs it in Chromium and checks that two runs agree.
+- The page freezes for a few seconds while it steps the frames. That is expected.
