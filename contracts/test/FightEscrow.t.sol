@@ -28,7 +28,19 @@ abstract contract FightFixture is Test {
     uint64 internal constant GRACE = 10 minutes;
     uint64 internal constant ARB_WINDOW = 1 days;
     uint256 internal constant BOND = 5e6;
-    uint16 internal constant RAKE = 300;
+    uint16 internal constant RAKE = 500; // a $200 pot is in the middle tier
+    uint16 internal constant RAKE_LOW = 700;
+    uint16 internal constant RAKE_HIGH = 300;
+
+    function _tiers() internal pure returns (uint256[] memory f, uint16[] memory b) {
+        f = new uint256[](3);
+        b = new uint16[](3);
+        f[1] = 100e6;
+        f[2] = 1_000e6;
+        b[0] = RAKE_LOW;
+        b[1] = RAKE;
+        b[2] = RAKE_HIGH;
+    }
     bytes32 internal constant REC = keccak256("record");
 
     TestToken internal token;
@@ -36,13 +48,13 @@ abstract contract FightFixture is Test {
 
     function setUp() public virtual {
         token = new TestToken();
+        (uint256[] memory f, uint16[] memory b) = _tiers();
         escrow = new FightEscrow(
             FightEscrow.Config({
                 token: address(token),
                 referee: ref,
                 arbiter: arbiter,
                 treasury: treasury,
-                rakeBps: RAKE,
                 challengeWindow: WINDOW,
                 matchDuration: DURATION,
                 abortGrace: GRACE,
@@ -50,7 +62,9 @@ abstract contract FightFixture is Test {
                 disputeBond: BOND,
                 minStake: 10e6,
                 maxStake: 1_000e6
-            })
+            }),
+            f,
+            b
         );
         address[3] memory who = [p1, p2, stranger];
         for (uint256 i = 0; i < who.length; i++) {
@@ -401,13 +415,26 @@ contract FightEscrowTest is FightFixture {
         assertEq(escrow.getMatch(id2).arbiter, stranger);
     }
 
+    function test_rakeTiersFollowThePot() public view {
+        assertEq(escrow.rakeBpsFor(10e6), 700); // $10 pot
+        assertEq(escrow.rakeBpsFor(99_990_000), 700); // $99.99
+        assertEq(escrow.rakeBpsFor(100e6), 500); // $100
+        assertEq(escrow.rakeBpsFor(999_990_000), 500);
+        assertEq(escrow.rakeBpsFor(1_000e6), 300); // $1,000
+        assertEq(escrow.rakeBpsFor(50_000e6), 300);
+    }
+
+    function test_rakeIsFixedWhenTheMatchStarts() public {
+        uint256 id = _newMatch();
+        assertEq(escrow.getMatch(id).rakeBps, RAKE); // a $200 pot
+    }
+
     function test_constructorRejectsBadConfig() public {
         FightEscrow.Config memory c = FightEscrow.Config({
             token: address(token),
             referee: ref,
             arbiter: arbiter,
             treasury: treasury,
-            rakeBps: 1001,
             challengeWindow: WINDOW,
             matchDuration: DURATION,
             abortGrace: GRACE,
@@ -416,16 +443,22 @@ contract FightEscrowTest is FightFixture {
             minStake: 10e6,
             maxStake: 1_000e6
         });
+        (uint256[] memory f, uint16[] memory b) = _tiers();
+        b[1] = 1001; // above the cap
         vm.expectRevert(FightEscrow.BadParam.selector);
-        new FightEscrow(c);
-        c.rakeBps = RAKE;
+        new FightEscrow(c, f, b);
+        b[1] = RAKE;
+        f[1] = 0; // floors must rise
+        vm.expectRevert(FightEscrow.BadParam.selector);
+        new FightEscrow(c, f, b);
+        f[1] = 100e6;
         c.maxStake = 1e6; // below the minimum
         vm.expectRevert(FightEscrow.BadParam.selector);
-        new FightEscrow(c);
+        new FightEscrow(c, f, b);
         c.maxStake = 1_000e6;
         c.arbiter = address(0);
         vm.expectRevert(FightEscrow.BadParam.selector);
-        new FightEscrow(c);
+        new FightEscrow(c, f, b);
     }
 }
 

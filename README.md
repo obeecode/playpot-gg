@@ -402,7 +402,7 @@ forge script script/DeployFight.s.sol --rpc-url https://sepolia.base.org --priva
 # then, with the printed address, add to the environment you run `npm run live` in (together with FIGHT_DIR and FIGHT_REF):
 $env:FIGHT_ESCROW="0x..."
 ```
-The referee key the server runs with must be the `REFEREE` the escrow was deployed with. Defaults (`DeployFight.s.sol`): 3% rake, 30-minute challenge window, 5 test tokens dispute bond, stakes from 10 to 100 test tokens.
+The referee key the server runs with must be the `REFEREE` the escrow was deployed with. Defaults (`DeployFight.s.sol`): rake by pot size (7% from a $10 pot, 5% from $100, 3% from $1,000), 30-minute challenge window, 5 test tokens dispute bond, stakes from 10 to 100 test tokens.
 
 **Play one** with the command line, until the lobby has screens for it (`node scripts/fight-stake.ts` with no arguments lists the commands): the host runs `offer 25`, the guest runs `challenge <id>`, each runs `link <id>` and opens their own link, both press F when ready. `status <id>`, `concede <id>`, `dispute <id>` and `claim` do what they say.
 

@@ -4687,11 +4687,6 @@ export const fightEscrowAbi = [
             "type": "address"
           },
           {
-            "internalType": "uint16",
-            "name": "rakeBps",
-            "type": "uint16"
-          },
-          {
             "internalType": "uint64",
             "name": "challengeWindow",
             "type": "uint64"
@@ -4730,6 +4725,16 @@ export const fightEscrowAbi = [
         "internalType": "struct FightEscrow.Config",
         "name": "c",
         "type": "tuple"
+      },
+      {
+        "internalType": "uint256[]",
+        "name": "floors",
+        "type": "uint256[]"
+      },
+      {
+        "internalType": "uint16[]",
+        "name": "bps",
+        "type": "uint16[]"
       }
     ],
     "stateMutability": "nonpayable",
@@ -5499,13 +5504,37 @@ export const fightEscrowAbi = [
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "rakeBps",
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "pot",
+        "type": "uint256"
+      }
+    ],
+    "name": "rakeBpsFor",
     "outputs": [
       {
         "internalType": "uint16",
         "name": "",
         "type": "uint16"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "rakeTiers",
+    "outputs": [
+      {
+        "internalType": "uint256[]",
+        "name": "floors",
+        "type": "uint256[]"
+      },
+      {
+        "internalType": "uint16[]",
+        "name": "bps",
+        "type": "uint16[]"
       }
     ],
     "stateMutability": "view",

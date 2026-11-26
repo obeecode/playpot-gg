@@ -137,6 +137,8 @@ export interface FightParams extends Omit<DeployParams, "referee"> {
   arbiterWindow?: number;
   minStake?: bigint;
   maxStake?: bigint;
+  /** Rake by pot size (both stakes together): [from pot, basis points]. The launch tiers: 7% from $10, 5% from $100, 3% from $1,000. */
+  rakeTiers?: Array<[bigint, number]>;
 }
 
 /** Deploys FightEscrow against an existing token (needs `forge build` first). */
@@ -149,15 +151,15 @@ export async function deployFight(p: FightParams): Promise<Address> {
     referee: p.referee,
     arbiter: p.arbiter,
     treasury: p.treasury,
-    rakeBps: p.rakeBps ?? 300,
     challengeWindow: BigInt(p.challengeWindow ?? 1800),
     matchDuration: BigInt(p.matchDuration ?? 1800),
     abortGrace: BigInt(p.abortGrace ?? 600),
     arbiterWindow: BigInt(p.arbiterWindow ?? 86400),
     disputeBond: p.bond ?? 5_000_000n,
-    minStake: p.minStake ?? 10_000_000n,
+    minStake: p.minStake ?? 5_000_000n,
     maxStake: p.maxStake ?? 100_000_000n,
   };
-  const r = await pub.waitForTransactionReceipt({ hash: await dep.deployContract({ chain: null, abi: f.abi as never, bytecode: f.bytecode, args: [config] as never }) });
+  const tiers = p.rakeTiers ?? [[0n, 700], [100_000_000n, 500], [1_000_000_000n, 300]];
+  const r = await pub.waitForTransactionReceipt({ hash: await dep.deployContract({ chain: null, abi: f.abi as never, bytecode: f.bytecode, args: [config, tiers.map((t) => t[0]), tiers.map((t) => t[1])] as never }) });
   return r.contractAddress!;
 }

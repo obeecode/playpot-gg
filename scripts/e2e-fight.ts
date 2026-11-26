@@ -33,7 +33,7 @@ const KEY = {
 const TREASURY: Address = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const ARBITER: Address = "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc";
 const STAKE = 20_000_000n;
-const RAKE_BPS = 300n;
+const RAKE_BPS = 700n; // a $40 pot is in the lowest tier
 const WINDOW = 4; // seconds: the challenge window, kept short for the test
 
 const failures: string[] = [];
@@ -68,7 +68,7 @@ const send = async (a: typeof alice, address: Address, abi: unknown, functionNam
 };
 
 const { token, escrow } = await deployContracts({ rpc, deployerPk: KEY.deployer, referee: referee.address, treasury: TREASURY });
-const fightEscrow = await deployFight({ rpc, deployerPk: KEY.deployer, token, referee: referee.address, arbiter: ARBITER, treasury: TREASURY, rakeBps: Number(RAKE_BPS), challengeWindow: WINDOW, matchDuration: 3600, abortGrace: 600 });
+const fightEscrow = await deployFight({ rpc, deployerPk: KEY.deployer, token, referee: referee.address, arbiter: ARBITER, treasury: TREASURY, challengeWindow: WINDOW, matchDuration: 3600, abortGrace: 600 });
 for (const a of [alice, bob]) {
   await send(a, token, testTokenAbi, "mint", [a.address, 1_000_000_000n]);
   await send(a, token, testTokenAbi, "approve", [fightEscrow, 2n ** 256n - 1n]);

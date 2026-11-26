@@ -46,7 +46,6 @@ contract FightEscrow {
         address referee;
         address arbiter;
         address treasury;
-        uint16 rakeBps;
         uint64 challengeWindow; // how long the loser has to dispute a proposed result
         uint64 matchDuration; // the longest a match may run before abort() becomes possible (with abortGrace)
         uint64 abortGrace;
@@ -94,7 +93,8 @@ contract FightEscrow {
 
     IERC20Minimal public immutable token;
     address public immutable treasury;
-    uint16 public immutable rakeBps;
+    uint256[] internal _rakeFloors; // pot sizes (both stakes together) where each rake tier starts; the first is 0
+    uint16[] internal _rakeTiers; // the rake in basis points for each tier
     uint64 public immutable challengeWindow;
     uint64 public immutable matchDuration;
     uint64 public immutable abortGrace;
@@ -137,9 +137,9 @@ contract FightEscrow {
     error NotReferee();
     error TransferFailed();
 
-    constructor(Config memory c) {
+    constructor(Config memory c, uint256[] memory floors, uint16[] memory bps) {
         if (
-            c.rakeBps > MAX_RAKE_BPS || c.token == address(0) || c.treasury == address(0) || c.referee == address(0)
+            c.token == address(0) || c.treasury == address(0) || c.referee == address(0)
                 || c.arbiter == address(0)
         ) revert BadParam();
         if (c.challengeWindow == 0 || c.matchDuration == 0 || c.arbiterWindow == 0) revert BadParam();
@@ -148,7 +148,12 @@ contract FightEscrow {
         referee = c.referee;
         arbiter = c.arbiter;
         treasury = c.treasury;
-        rakeBps = c.rakeBps;
+        if (floors.length == 0 || floors.length != bps.length || floors[0] != 0) revert BadParam();
+        for (uint256 i = 0; i < floors.length; i++) {
+            if (bps[i] > MAX_RAKE_BPS || (i > 0 && floors[i] <= floors[i - 1])) revert BadParam();
+        }
+        _rakeFloors = floors;
+        _rakeTiers = bps;
         challengeWindow = c.challengeWindow;
         matchDuration = c.matchDuration;
         abortGrace = c.abortGrace;
@@ -210,6 +215,17 @@ contract FightEscrow {
         emit OfferCancelled(id);
     }
 
+    /// The rake for a pot: the tier whose floor is the highest one at or below the pot. Fixed for a match when it starts.
+    function rakeBpsFor(uint256 pot) public view returns (uint16) {
+        uint256 i = _rakeFloors.length;
+        while (i > 1 && pot < _rakeFloors[i - 1]) i--;
+        return _rakeTiers[i - 1];
+    }
+
+    function rakeTiers() external view returns (uint256[] memory floors, uint16[] memory bps) {
+        return (_rakeFloors, _rakeTiers);
+    }
+
     /// One atomic call: pulls the challenger's matching stake and starts the match.
     function challenge(uint256 id, address sessionKey) external {
         if (paused) revert PausedErr();
@@ -227,7 +243,7 @@ contract FightEscrow {
         m.referee = referee;
         m.arbiter = arbiter;
         m.stake = o.stake;
-        m.rakeBps = rakeBps;
+        m.rakeBps = rakeBpsFor(o.stake * 2);
         m.status = Status.Active;
         m.deadline = uint64(block.timestamp) + matchDuration + abortGrace;
 
