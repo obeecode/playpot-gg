@@ -20,7 +20,7 @@ const server = createServer((req, res) => {
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? process.env.CHROME, args: ["--no-sandbox", "--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
-const runs: Array<{ hashes: string[]; fingerprint: string; checkpoints: string[]; math: Record<string, string>; tickErrors: number; framesUnavailable: number }> = [];
+const runs: Array<{ hashes: string[]; fingerprint: string; checkpoints: string[]; math: Record<string, string>; dm: Record<string, string> | null; tickErrors: number; framesUnavailable: number }> = [];
 for (let i = 0; i < 2; i++) {
   const page = await (await browser.newContext({ viewport: { width: 960, height: 540 } })).newPage();
   page.setDefaultTimeout(240_000);
@@ -38,7 +38,8 @@ if (process.env.HASH_OUT) (await import("node:fs")).writeFileSync(process.env.HA
 console.log(`probe ${seed},${frames}`);
 runs.forEach((r, i) => console.log(`  run ${i + 1}: game fingerprint ${r.fingerprint}, tick errors ${r.tickErrors}, frames without a snapshot ${r.framesUnavailable}`));
 console.log(`  checkpoints: ${runs[0].checkpoints.join("  ")}`);
-console.log(`  math: ${Object.entries(runs[0].math).map(([k, v]) => `${k} ${v}`).join("  ")}`);
+console.log(`  deterministic math: ${runs[0].dm ? Object.entries(runs[0].dm).map(([k, v]) => `${k} ${v}`).join("  ") : "(the build does not carry it)"}`);
+console.log(`  the browser's own math: ${Object.entries(runs[0].math).map(([k, v]) => `${k} ${v}`).join("  ")}`);
 const same = runs[0].fingerprint === runs[1].fingerprint;
 console.log(same ? "the two runs agree" : "THE TWO RUNS DISAGREE");
 process.exit(same ? 0 : 1);

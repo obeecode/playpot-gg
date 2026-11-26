@@ -68,10 +68,32 @@
     return out;
   }
 
+  // the fixed replacements the hardened game build uses (window.__DM), fingerprinted the same way: these must match in every browser
+  function dmFingerprints() {
+    var D = window.__DM;
+    if (!D) return null;
+    var fns = {
+      sin: function (x) { return D.sin(x); },
+      cos: function (x) { return D.cos(x); },
+      atan2: function (x, i) { return D.atan2(x, 3.7 + (i % 11)); },
+      pow: function (x, i) { return D.pow(1.0007 + i * 0.0001, i * 0.5); },
+      exp: function (x) { return D.exp(x / 90); },
+      log: function (x, i) { return D.log(1 + i * 3.3); },
+      hypot: function (x, i) { return D.hypot(x, i * 0.7); },
+    };
+    var out = {};
+    Object.keys(fns).forEach(function (k) {
+      var f = new Fp();
+      for (var i = 0; i < 2000; i++) f.feed(String(fns[k](i * 0.37 - 300, i)));
+      out[k] = f.hex();
+    });
+    return out;
+  }
+
   function sleep(ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
   }
-  var result = { seed: SEED, frames: N, ua: navigator.userAgent, math: mathFingerprints(), done: false };
+  var result = { seed: SEED, frames: N, ua: navigator.userAgent, math: mathFingerprints(), dm: null, done: false };
   window.__probe = result;
 
   async function run() {
@@ -125,6 +147,7 @@
       if (f > 0) fp.feed(h); // the first frame carries a start-up counter that depends on when the page began, not on the math
       if ((f + 1) % 250 === 0) result.checkpoints.push((f + 1) + ":" + fp.hex());
     }
+    result.dm = dmFingerprints();
     result.fingerprint = fp.hex();
     result.tickErrors = errors;
     result.framesUnavailable = unavailable;
@@ -138,7 +161,9 @@
       "frames: " + N + ", tick errors: " + errors + ", frames without a snapshot: " + unavailable,
       "checkpoints (cumulative): " + result.checkpoints.join("  "),
       "",
-      "MATH ONLY (no game involved), one fingerprint per function:",
+      result.dm ? "DETERMINISTIC MATH the game uses (must be identical in every browser):\n" + Object.keys(result.dm).map(function (m) { return "  " + m + ": " + result.dm[m]; }).join("\n") : "(this game build does not carry the deterministic math)",
+      "",
+      "THE BROWSER'S OWN MATH (no game involved; these may differ between browsers, which is why the game no longer uses them):",
       Object.keys(result.math).map(function (m) { return "  " + m + ": " + result.math[m]; }).join("\n"),
       "",
       "browser: " + navigator.userAgent,
